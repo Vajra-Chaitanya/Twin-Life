@@ -139,8 +139,7 @@ def generate_explanation(
             f"Blood Pressure: {hp.get('hypertension_stage')}\n"
             f"Cardiovascular Risk: {hp.get('cardio_risk', {}).get('probability', 'N/A')} "
             f"({hp.get('cardio_risk', {}).get('label', 'N/A')})\n"
-            f"Diabetes Risk: {hp.get('diabetes_risk', {}).get('probability', 'N/A')} "
-            f"({hp.get('diabetes_risk', {}).get('label', 'N/A')})\n"
+            f"Diabetes Indicator: {hp.get('diabetes_indicator', 'N/A')}\n"
             f"Overall Health Score: {hp.get('overall_health_score')}/100"
         )
 
@@ -269,7 +268,7 @@ if __name__ == "__main__":
             "obesity_class": "Overweight (Pre-obese)",
             "hypertension_stage": "Stage 1",
             "cardio_risk": {"probability": 0.42, "label": "Elevated"},
-            "diabetes_risk": {"probability": 0.15, "label": "Low"},
+            "diabetes_indicator": "Medium",
             "overall_health_score": 58,
         },
         "finance": {

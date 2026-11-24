@@ -11,6 +11,8 @@ Usage:
     profile = twin.assess(inputs, health_profile, finance_profile)
 """
 
+from copy import deepcopy
+
 from formulas import (
     coverage_adequacy_ratio,
     premium_affordability_ratio,
@@ -33,6 +35,7 @@ ESTIMATED_COST_TABLE: dict[str, dict[str, float]] = {
     },
     "diabetes": {
         "Low":       30_000,
+        "Medium":    150_000,
         "Moderate":  150_000,
         "Elevated":  400_000,
         "High":      700_000,
@@ -79,6 +82,12 @@ class InsuranceTwin:
     Note: All monetary estimates are illustrative for academic purposes
     and should not be treated as licensed financial advice.
     """
+
+    def __init__(self) -> None:
+        self.latest_inputs = None
+        self.latest_health_profile = None
+        self.latest_finance_profile = None
+        self.latest_profile = None
 
     def assess(
         self,
@@ -140,7 +149,7 @@ class InsuranceTwin:
         # --- Composite score ---
         score = insurance_adequacy_score(cov_ratio, prem_ratio, len(gaps))
 
-        return {
+        profile = {
             "estimated_future_cost": round(total_cost, 2),
             "cost_breakdown": cost_breakdown,
             "coverage_adequacy_ratio": cov_ratio,
@@ -158,6 +167,41 @@ class InsuranceTwin:
                 "insurance advice."
             ),
         }
+        self.latest_inputs = deepcopy(inputs)
+        self.latest_health_profile = health_profile
+        self.latest_finance_profile = finance_profile
+        self.latest_profile = profile
+        return profile
+
+    def simulate(self, modified_inputs: dict) -> dict:
+        """Return before/after profiles for hypothetical policy changes.
+
+        Call assess() first to establish the policy and domain-profile baseline.
+        Health and finance context remain unchanged during this simulation.
+        """
+        if (
+            self.latest_inputs is None
+            or self.latest_health_profile is None
+            or self.latest_finance_profile is None
+            or self.latest_profile is None
+        ):
+            raise RuntimeError("Call assess() before simulate()")
+
+        baseline_inputs = deepcopy(self.latest_inputs)
+        baseline_health = self.latest_health_profile
+        baseline_finance = self.latest_finance_profile
+        baseline_profile = self.latest_profile
+        after_profile = self.assess(
+            {**baseline_inputs, **modified_inputs},
+            baseline_health,
+            baseline_finance,
+        )
+        self.latest_inputs = baseline_inputs
+        self.latest_health_profile = baseline_health
+        self.latest_finance_profile = baseline_finance
+        self.latest_profile = baseline_profile
+
+        return {"before": baseline_profile, "after": after_profile}
 
     # ------------------------------------------------------------------
     #  Cost-lookup for the combined simulator (Module 4)
@@ -188,7 +232,7 @@ class InsuranceTwin:
         breakdown["cardio"] = ESTIMATED_COST_TABLE["cardio"].get(cardio_label, 50_000)
 
         # Diabetes
-        diabetes_label = health_profile.get("diabetes_risk", {}).get("label", "Low")
+        diabetes_label = health_profile.get("diabetes_indicator", "Low")
         breakdown["diabetes"] = ESTIMATED_COST_TABLE["diabetes"].get(diabetes_label, 30_000)
 
         # Hypertension
@@ -223,7 +267,6 @@ if __name__ == "__main__":
             },
             "health_profile": {
                 "cardio_risk": {"probability": 0.12, "label": "Low"},
-                "diabetes_risk": {"probability": 0.05, "label": "Low"},
                 "diabetes_indicator": "Low",
                 "hypertension_stage": "Normal",
             },
@@ -243,7 +286,6 @@ if __name__ == "__main__":
             },
             "health_profile": {
                 "cardio_risk": {"probability": 0.65, "label": "High"},
-                "diabetes_risk": {"probability": 0.45, "label": "Elevated"},
                 "diabetes_indicator": "High",
                 "hypertension_stage": "Stage 2",
             },
@@ -263,7 +305,6 @@ if __name__ == "__main__":
             },
             "health_profile": {
                 "cardio_risk": {"probability": 0.35, "label": "Moderate"},
-                "diabetes_risk": {"probability": 0.15, "label": "Low"},
                 "diabetes_indicator": "Medium",
                 "hypertension_stage": "Stage 1",
             },

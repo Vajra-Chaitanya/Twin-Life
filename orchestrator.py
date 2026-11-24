@@ -108,21 +108,13 @@ class Orchestrator:
         self.finance_inputs = finance_inputs
         self.insurance_inputs = insurance_inputs
 
-        # Initialize twins
-        self.health_twin = HealthTwin()
-        self.finance_twin = FinanceTwin()
-        self.insurance_twin = InsuranceTwin()
-
-        # Initialize RAG agent
-        self.rag_agent = RAGAgent()
-        self.rag_agent.build_index()  # no-op if already indexed
-
-        # Pre-compute profiles
-        self.health_profile = self.health_twin.assess(health_inputs)
-        self.finance_profile = self.finance_twin.assess(finance_inputs)
-        self.insurance_profile = self.insurance_twin.assess(
-            insurance_inputs, self.health_profile, self.finance_profile,
-        )
+        self.health_twin = None
+        self.finance_twin = None
+        self.insurance_twin = None
+        self.rag_agent = None
+        self.health_profile = None
+        self.finance_profile = None
+        self.insurance_profile = None
 
         # Build LangGraph
         self.graph = self._build_graph()
@@ -237,25 +229,56 @@ class Orchestrator:
     # ------------------------------------------------------------------
     #  LANGGRAPH NODE FUNCTIONS
     # ------------------------------------------------------------------
+    def _get_health_profile(self) -> dict:
+        if self.health_profile is None:
+            if self.health_twin is None:
+                self.health_twin = HealthTwin()
+            self.health_profile = self.health_twin.assess(self.health_inputs)
+        return self.health_profile
+
+    def _get_finance_profile(self) -> dict:
+        if self.finance_profile is None:
+            if self.finance_twin is None:
+                self.finance_twin = FinanceTwin()
+            self.finance_profile = self.finance_twin.assess(self.finance_inputs)
+        return self.finance_profile
+
+    def _get_insurance_profile(self) -> dict:
+        if self.insurance_profile is None:
+            if self.insurance_twin is None:
+                self.insurance_twin = InsuranceTwin()
+            self.insurance_profile = self.insurance_twin.assess(
+                self.insurance_inputs,
+                self._get_health_profile(),
+                self._get_finance_profile(),
+            )
+        return self.insurance_profile
+
+    def _get_rag_agent(self) -> RAGAgent:
+        if self.rag_agent is None:
+            self.rag_agent = RAGAgent()
+            self.rag_agent.build_index()
+        return self.rag_agent
+
     def _health_node(self, state: dict) -> dict:
         """Execute HealthTwin assessment."""
-        state["health_profile"] = self.health_profile
+        state["health_profile"] = self._get_health_profile()
         return state
 
     def _finance_node(self, state: dict) -> dict:
         """Execute FinanceTwin assessment."""
-        state["finance_profile"] = self.finance_profile
+        state["finance_profile"] = self._get_finance_profile()
         return state
 
     def _insurance_node(self, state: dict) -> dict:
         """Execute InsuranceTwin assessment."""
-        state["insurance_profile"] = self.insurance_profile
+        state["insurance_profile"] = self._get_insurance_profile()
         return state
 
     def _rag_node(self, state: dict) -> dict:
         """Retrieve relevant guideline chunks via RAG."""
         query = state.get("query", "")
-        chunks = self.rag_agent.retrieve(query, top_k=3)
+        chunks = self._get_rag_agent().retrieve(query, top_k=3)
         state["rag_chunks"] = chunks
         return state
 
@@ -270,10 +293,18 @@ class Orchestrator:
             # Extract cost from query (simple regex for Rs./₹ amounts)
             query = state.get("query", "")
             cost = self._extract_cost(query)
+            if cost is None:
+                state["simulation_result"] = {
+                    "error": "Please include a specific treatment cost to run this simulation."
+                }
+                return state
             condition = self._extract_condition(query)
+            self._get_finance_profile()
+            if self.insurance_twin is None:
+                self.insurance_twin = InsuranceTwin()
 
             sim = CombinedSimulator(
-                health_profile=self.health_profile,
+                health_profile=self._get_health_profile(),
                 finance_twin=self.finance_twin,
                 insurance_twin=self.insurance_twin,
                 insurance_inputs=self.insurance_inputs,
@@ -440,7 +471,7 @@ class Orchestrator:
     #  HELPERS
     # ------------------------------------------------------------------
     @staticmethod
-    def _extract_cost(query: str) -> float:
+    def _extract_cost(query: str) -> float | None:
         """Extract a monetary amount from a query string."""
         # Match patterns like: Rs.500000, ₹5,00,000, 5 lakh, 500000
         patterns = [
@@ -460,7 +491,7 @@ class Orchestrator:
                 elif i == 2:  # crore
                     num *= 10_000_000
                 return num
-        return 500_000  # default fallback
+        return None
 
     @staticmethod
     def _extract_condition(query: str) -> str:

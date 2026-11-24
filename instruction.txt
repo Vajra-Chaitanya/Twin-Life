@@ -88,18 +88,17 @@ Step 2.2: Configure your .env file:
   Fund, Stability Score, Affordability Score), and Insurance (Coverage Ratio,
   Premium Affordability, Insurance Score).
 
-* Module 2: `train_cardio_model.py` & `train_diabetes_model.py`
-  Trained Machine Learning models using RandomForestClassifier:
+* Module 2: `train_cardio_model.py`
+  One trained Machine Learning model using RandomForestClassifier:
   - Cardio Model: Cleans `data/cardio_train.csv` (70k rows), converts age from
     days to years, filters valid blood pressure ranges (ap_hi > ap_lo).
     Saves to `models/cardio_model.pkl`.
-  - Diabetes Model: Cleans `data/diabetes_prediction_dataset.csv` (100k rows),
-    removes exact duplicates, applies one-hot encoding, uses class balancing.
-    Saves to `models/diabetes_model.pkl` & `models/diabetes_feature_cols.pkl`.
+  - Diabetes status is computed by the glucose-threshold formula in
+    `formulas.py`; it does not use a trained model.
 
 * Module 3: `health_twin.py`, `finance_twin.py`, `insurance_twin.py`
-  - HealthTwin: Combines both ML models + SHAP explanations + Module 1 formulas
-    to output an overall health score (0-100).
+  - HealthTwin: Combines the cardiovascular model + SHAP explanations + Module 1
+    formulas to output an overall health score (0-100).
   - FinanceTwin: Pure formula-based evaluation of DTI, emergency fund, and
     disposable income.
   - InsuranceTwin: Rule-based future medical cost estimation and rider gap analysis.
@@ -159,8 +158,8 @@ Step 4.1: Run Module 1 Unit Tests
     Expected Output: 70 passed in ~0.2s
 
 -------------------------------------------------------------------------------
-Step 4.2: Train the Health Machine Learning Models (Module 2)
-    Train both independent Random Forest classifiers and verify benchmark metrics:
+Step 4.2: Train the Health Machine Learning Model (Module 2)
+  Train the cardiovascular Random Forest classifier and verify benchmark metrics:
 
     # Train Cardiovascular Disease Model
     python train_cardio_model.py
@@ -171,20 +170,11 @@ Step 4.2: Train the Health Machine Learning Models (Module 2)
       ROC-AUC  : ~80.3%
       Model saved to models/cardio_model.pkl
 
-    # Train Diabetes Prediction Model
-    python train_diabetes_model.py
-
-    Expected output:
-      Accuracy : ~90.2%
-      F1-score : ~61.7%
-      ROC-AUC  : ~97.5%
-      Model saved to models/diabetes_model.pkl
-
 -------------------------------------------------------------------------------
 Step 4.3: Execute Standalone Digital Twin Assessments (Module 3)
     Verify each Digital Twin independently using hardcoded test cases:
 
-    # Run Health Twin assessment (ML models + SHAP + Formulas)
+    # Run Health Twin assessment (ML model + SHAP + Formulas)
     python health_twin.py
 
     # Run Finance Twin assessment (Formula-based financial health)

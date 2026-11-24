@@ -1,7 +1,7 @@
 """
 Module 3A -- health_twin.py
-HealthTwin: loads BOTH the cardio and diabetes ML models, runs predictions
-with SHAP explanations, and combines with rule-based formulas from Module 1.
+HealthTwin: loads the cardiovascular ML model, runs a prediction with SHAP
+explanations, and combines it with rule-based formulas from Module 1.
 
 Usage:
     twin = HealthTwin()
@@ -38,8 +38,6 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # ---------------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CARDIO_MODEL_PATH = os.path.join(BASE_DIR, "models", "cardio_model.pkl")
-DIABETES_MODEL_PATH = os.path.join(BASE_DIR, "models", "diabetes_model.pkl")
-DIABETES_FEATURES_PATH = os.path.join(BASE_DIR, "models", "diabetes_feature_cols.pkl")
 
 # Cardio model feature order (must match train_cardio_model.py)
 CARDIO_FEATURES = [
@@ -53,21 +51,21 @@ CARDIO_FEATURES = [
 class HealthTwin:
     """Digital twin for health assessment.
 
-    Combines two trained ML models (cardiovascular disease, diabetes) with
-    rule-based formulas (BMI, BP staging, Framingham risk, diabetes indicator)
-    to produce a unified health profile with SHAP-based explainability.
+    Combines one trained cardiovascular ML model with rule-based formulas
+    (BMI, BP staging, Framingham risk, and diabetes indicator) to produce a
+    unified health profile with SHAP-based explainability.
 
     Attributes:
-        cardio_model:   Trained RandomForestClassifier for CVD prediction.
-        diabetes_model: Trained RandomForestClassifier for diabetes prediction.
-        diabetes_feature_cols: Feature column order for the diabetes model.
+        cardio_model: Trained RandomForestClassifier for CVD prediction.
+        latest_inputs: Most recent inputs passed to assess().
+        latest_profile: Most recent profile computed by assess().
     """
 
     def __init__(self) -> None:
-        """Load both pre-trained models from disk."""
+        """Load the pre-trained cardiovascular model from disk."""
         self.cardio_model = joblib.load(CARDIO_MODEL_PATH)
-        self.diabetes_model = joblib.load(DIABETES_MODEL_PATH)
-        self.diabetes_feature_cols = joblib.load(DIABETES_FEATURES_PATH)
+        self.latest_inputs = None
+        self.latest_profile = None
 
     # ------------------------------------------------------------------
     #  PUBLIC API
@@ -90,13 +88,7 @@ class HealthTwin:
                   smoke (int)      - 0/1
                   alco (int)       - 0/1
                   active (int)     - 0/1
-                Diabetes-specific (optional -- used by diabetes model):
-                  hypertension (int)       - 0/1
-                  heart_disease (int)      - 0/1
-                  smoking_history (str)    - one of: never, No Info, current,
-                                             former, ever, not current
-                  HbA1c_level (float)
-                  blood_glucose_level (float)
+                                blood_glucose_level (float, optional) - fasting glucose mg/dL
 
         Returns:
             health_profile dict matching the spec shape:
@@ -105,7 +97,6 @@ class HealthTwin:
                 "obesity_class": str,
                 "hypertension_stage": str,
                 "cardio_risk": {"probability": float, "label": str},
-                "diabetes_risk": {"probability": float, "label": str},
                 "diabetes_indicator": str,
                 "overall_health_score": int,   # 0-100
                 "shap_top_features": [
@@ -133,19 +124,12 @@ class HealthTwin:
         cardio_prob, cardio_shap = self._predict_cardio(inputs, bmi_val)
         cardio_label = self._risk_label(cardio_prob)
 
-        # --- Diabetes model prediction ---
-        diabetes_prob, diabetes_shap = self._predict_diabetes(inputs, bmi_val)
-        diabetes_label = self._risk_label(diabetes_prob)
-
-        # --- Merge SHAP features (top 5 from each model, deduplicated) ---
-        shap_top = self._merge_shap(cardio_shap, diabetes_shap)
-
         # --- Overall health score (0-100, higher = healthier) ---
         overall = self._compute_overall_score(
-            bmi_val, bp, cardio_prob, diabetes_prob, framingham,
+            bmi_val, bp, cardio_prob, diab_indicator, framingham,
         )
 
-        return {
+        profile = {
             "bmi": bmi_val,
             "obesity_class": obesity,
             "hypertension_stage": bp,
@@ -153,15 +137,31 @@ class HealthTwin:
                 "probability": round(cardio_prob, 3),
                 "label": cardio_label,
             },
-            "diabetes_risk": {
-                "probability": round(diabetes_prob, 3),
-                "label": diabetes_label,
-            },
             "diabetes_indicator": diab_indicator,
             "framingham_10yr_risk": round(framingham, 1),
             "overall_health_score": overall,
-            "shap_top_features": shap_top,
+            "shap_top_features": cardio_shap,
         }
+        self.latest_inputs = dict(inputs)
+        self.latest_profile = profile
+        return profile
+
+    def simulate(self, modified_inputs: dict) -> dict:
+        """Return before/after profiles for hypothetical input changes.
+
+        Call assess() first to establish the baseline. Modified fields are
+        merged over those baseline inputs; the baseline is restored afterward.
+        """
+        if self.latest_inputs is None or self.latest_profile is None:
+            raise RuntimeError("Call assess() before simulate()")
+
+        baseline_inputs = dict(self.latest_inputs)
+        baseline_profile = self.latest_profile
+        after_profile = self.assess({**baseline_inputs, **modified_inputs})
+        self.latest_inputs = baseline_inputs
+        self.latest_profile = baseline_profile
+
+        return {"before": baseline_profile, "after": after_profile}
 
     # ------------------------------------------------------------------
     #  CARDIO MODEL HELPERS
@@ -205,58 +205,6 @@ class HealthTwin:
         return prob, shap_features
 
     # ------------------------------------------------------------------
-    #  DIABETES MODEL HELPERS
-    # ------------------------------------------------------------------
-    def _predict_diabetes(
-        self, inputs: dict, bmi_val: float,
-    ) -> tuple[float, list[dict]]:
-        """Run diabetes model prediction + SHAP explanation."""
-        # Build the raw row, then one-hot encode to match training
-        gender_str = inputs["gender"].strip().capitalize()  # Female / Male
-        if gender_str not in ("Female", "Male", "Other"):
-            gender_str = "Male" if gender_str == "male" else gender_str
-            gender_str = gender_str.capitalize()
-
-        smoking = inputs.get("smoking_history", "No Info")
-
-        raw = {
-            "age":                inputs["age"],
-            "hypertension":       inputs.get("hypertension", 0),
-            "heart_disease":      inputs.get("heart_disease", 0),
-            "bmi":                bmi_val,
-            "HbA1c_level":        inputs.get("HbA1c_level", 5.5),
-            "blood_glucose_level": inputs.get("blood_glucose_level", 90),
-        }
-        # One-hot: gender
-        for cat in ("Female", "Male", "Other"):
-            raw[f"gender_{cat}"] = 1 if gender_str == cat else 0
-        # One-hot: smoking_history
-        for cat in ("No Info", "current", "ever", "former", "never", "not current"):
-            raw[f"smoking_{cat}"] = 1 if smoking == cat else 0
-
-        row = pd.DataFrame([raw])[self.diabetes_feature_cols]
-
-        prob = float(self.diabetes_model.predict_proba(row)[0, 1])
-
-        # SHAP
-        shap_features = []
-        if SHAP_AVAILABLE:
-            explainer = shap.TreeExplainer(self.diabetes_model)
-            sv = explainer.shap_values(row)
-            if isinstance(sv, list):
-                vals = sv[1][0]
-            else:
-                vals = sv[0] if sv.ndim == 1 else sv[0, :, 1] if sv.ndim == 3 else sv[0]
-            for feat, val in sorted(
-                zip(self.diabetes_feature_cols, vals),
-                key=lambda x: abs(x[1]), reverse=True,
-            )[:5]:
-                shap_features.append({
-                    "feature": feat, "impact": round(float(val), 4), "model": "diabetes",
-                })
-        return prob, shap_features
-
-    # ------------------------------------------------------------------
     #  SCORING HELPERS
     # ------------------------------------------------------------------
     @staticmethod
@@ -284,7 +232,7 @@ class HealthTwin:
         bmi_val: float,
         bp_stage_str: str,
         cardio_prob: float,
-        diabetes_prob: float,
+        diabetes_indicator_value: str,
         framingham: float,
     ) -> int:
         """Weighted composite health score (0-100, higher = healthier).
@@ -293,7 +241,7 @@ class HealthTwin:
           25%  BMI component  -- distance from ideal BMI 22
           25%  BP component   -- Normal=100, Elevated=70, S1=40, S2=10
           25%  Cardio risk    -- (1 - cardio_prob) * 100
-          15%  Diabetes risk  -- (1 - diabetes_prob) * 100
+          15%  Diabetes indicator -- deterministic tier score
           10%  Framingham     -- (1 - clamp(framingham/50, 0, 1)) * 100
         """
         # BMI: ideal=22, penalty grows with distance
@@ -304,7 +252,9 @@ class HealthTwin:
         bp_score = bp_map.get(bp_stage_str, 50)
 
         cardio_score = (1.0 - cardio_prob) * 100.0
-        diabetes_score = (1.0 - diabetes_prob) * 100.0
+        diabetes_score = {"Low": 100.0, "Medium": 60.0, "High": 20.0}.get(
+            diabetes_indicator_value, 50.0,
+        )
         fram_score = (1.0 - min(framingham / 50.0, 1.0)) * 100.0
 
         weighted = (
@@ -315,16 +265,6 @@ class HealthTwin:
             + 0.10 * fram_score
         )
         return int(round(max(0, min(100, weighted))))
-
-    @staticmethod
-    def _merge_shap(
-        cardio_shap: list[dict], diabetes_shap: list[dict],
-    ) -> list[dict]:
-        """Merge and sort top SHAP features from both models."""
-        combined = cardio_shap + diabetes_shap
-        combined.sort(key=lambda x: abs(x["impact"]), reverse=True)
-        return combined[:10]  # top 10 across both models
-
 
 # ======================================================================
 #  STANDALONE VERIFICATION (python health_twin.py)

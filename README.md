@@ -12,7 +12,10 @@
 
 - [Overview & Architecture](#-overview--architecture)
 - [Module Breakdown](#-module-breakdown)
+- [Web Platform (API + Frontend)](#-web-platform-api--frontend)
 - [Installation & Setup](#-installation--setup)
+- [Run the Full App](#-run-the-full-app)
+- [Demo Script](#-demo-script)
 - [Quick Start & Command Guide](#-quick-start--command-guide)
 - [Autonomous Agent Workflow](#-autonomous-agent-workflow)
 - [RAG Pipeline](#-rag-pipeline)
@@ -77,20 +80,16 @@ TwinLife AI operates on a modular pipeline where deterministic mathematical form
 - **Insurance**: Coverage Adequacy Ratio, Premium Affordability Ratio, Composite Insurance Adequacy Score (0-100).
 - **Unit Tests**: Full test suite in `test_formulas.py` (70 unit tests passing).
 
-### Module 2: Health ML Models (`train_cardio_model.py` & `train_diabetes_model.py`)
+### Module 2: Health ML Model (`train_cardio_model.py`)
 - **Cardiovascular Disease Classifier**:
   - Dataset: `data/cardio_train.csv` (70,000 rows).
   - Preprocessing: Age converted from days to years (`age // 365`), BMI derived, physiological filtering (`ap_lo <= ap_hi`).
   - Model: `RandomForestClassifier(n_estimators=200, max_depth=10, min_samples_leaf=20)`.
   - Metrics: **Accuracy: 73.6% | F1-Score: 72.0% | ROC-AUC: 80.3%**. Saved to `models/cardio_model.pkl`.
-- **Diabetes Classifier**:
-  - Dataset: `data/diabetes_prediction_dataset.csv` (100,000 rows).
-  - Preprocessing: Deduplication (3,854 duplicate rows removed), One-hot encoding for categorical variables, class balancing.
-  - Model: `RandomForestClassifier(class_weight='balanced')`.
-  - Metrics: **Accuracy: 90.2% | F1-Score: 61.7% | ROC-AUC: 97.5%**. Saved to `models/diabetes_model.pkl`.
+- Diabetes status is computed with a deterministic glucose-threshold indicator, not a second model.
 
 ### Module 3: Digital Twin Classes (`health_twin.py`, `finance_twin.py`, `insurance_twin.py`)
-- **`HealthTwin`**: Integrates both ML model predictions, SHAP feature importance tree explainers, and Module 1 formulas into a unified health profile and a 0-100 composite health score.
+- **`HealthTwin`**: Integrates the CVD model prediction, SHAP feature importance, and Module 1 formulas into a unified health profile and a 0-100 composite health score.
 - **`FinanceTwin`**: Evaluates financial stability, debt obligations, emergency funds, and computes 12-month treatment affordability (`affordability_for(cost)`).
 - **`InsuranceTwin`**: Estimates 5-year condition-specific medical costs, checks sum insured limits, and performs rider gap analysis (e.g. Critical Illness, Diabetes Care, Hospital Cash riders).
 
@@ -139,6 +138,43 @@ TwinLife AI operates on a modular pipeline where deterministic mathematical form
 
 ---
 
+## 🌐 Web Platform (API + Frontend)
+
+### Module 10: FastAPI Backend (`api.py`)
+SQLAlchemy persistence (SQLite by default at `data/twinlife.sqlite3`; set `DATABASE_URL` for PostgreSQL).
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /health` | Liveness check |
+| `POST /onboard` | Validate and store versioned health/finance/insurance inputs |
+| `GET /inputs` | Latest stored inputs for a user |
+| `POST /assess` | Run all three twins, save a snapshot, raise watchdog alerts vs. the previous snapshot |
+| `GET /history` | Snapshots, newest first |
+| `POST /simulate` | Before/after twins for overrides + 12-month Monte Carlo savings bands (not persisted) |
+| `POST /whatif` | Purchase impact and ranked alternatives |
+| `POST /query` | LangGraph orchestrator → RAG citations → Gemini agent/narration; saved to chat history |
+| `GET /chat-history` | Previous advisor exchanges |
+| `GET /notifications`, `POST /notifications/read` | Watchdog alerts and read state |
+
+Raw AI errors are mapped to user-safe messages. Interactive docs: `http://127.0.0.1:8000/docs`.
+
+### Module 11: React Frontend (`frontend/`)
+React 19 + Vite + TypeScript + Tailwind v4 + Framer Motion + React Three Fiber, in a dark black-and-gold theme.
+
+| Page | Highlights |
+|---|---|
+| Landing | 3D particle hologram whose heartbeat reflects live CVD risk (2D fallback without WebGL) |
+| Calibrate Twin | 4-step wizard, demo personas, live formula readout, "building your twin" sequence |
+| Dashboard | Score rings, CVD gauge, SHAP diverging chart, cash-flow, coverage and rider gaps, key signals |
+| What-If Lab | Parallel timelines (today vs. simulated), presets, Monte Carlo fan chart, purchase impact |
+| Time Machine | Animated trend chart, scrubber/playback, metric deltas, demo improvement journey |
+| AI Advisor | Typewriter answers, guideline citations, agent pipeline and tool-call trace, voice input |
+| Alerts | Watchdog timeline, unread badge, toasts |
+
+Global: **Ctrl+K** command palette, guided demo tour, motion toggle (respects reduced-motion by default), per-page code splitting.
+
+---
+
 ## ⚡ Installation & Setup
 
 ### 1. Clone & Environment Creation
@@ -161,6 +197,53 @@ Obtain a free API Key from [Google AI Studio](https://aistudio.google.com/apikey
 GEMINI_API_KEY=AIzaSy...your_api_key_here...
 ```
 
+> Only the AI Advisor (`/query`) calls Gemini. It sends the twin profile to Google, so use synthetic demo data.
+
+---
+
+## ▶️ Run the Full App
+
+Requires Python 3.12 and Node.js 20+. Use two terminals from the project root.
+
+```powershell
+# Terminal 1: backend (http://127.0.0.1:8000)
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m uvicorn api:app --host 127.0.0.1 --port 8000 --reload
+
+# Terminal 2: frontend (http://127.0.0.1:5173)
+cd frontend
+npm install
+npm run dev
+```
+
+The Vite dev server proxies `/api/*` to the backend, so no CORS setup is needed.
+
+### Tests
+```powershell
+# Offline suite (no network; Gemini scripts excluded)
+.\.venv\Scripts\python.exe -m pytest -q --ignore test_api.py --ignore test_combined_simulator.py
+
+# Frontend type-check + production build
+cd frontend; npm run build
+```
+
+`test_api.py` and `test_combined_simulator.py` are manual scripts that call the live Gemini API.
+
+---
+
+## 🎬 Demo Script
+
+1. Open `http://127.0.0.1:5173`, switch **Motion: full**.
+2. Press **Ctrl+K → Prepare demo data** (calibrates three synthetic personas, ends on high-risk Rahul; watchdog alerts appear).
+3. **Ctrl+K → Start guided demo tour** and walk through each page:
+   - Dashboard: explain the SHAP chart (top risk driver).
+   - What-If Lab: click **Job loss**, then **Clear all EMIs**; watch the fan chart move.
+   - Time Machine: **Generate demo journey**, then press ▶.
+   - AI Advisor: ask *"Can I afford a heart treatment costing 3 lakh rupees?"* and open the agent trace.
+   - Alerts: show the watchdog timeline.
+4. Return home to show the hologram's heartbeat reflecting the current twin.
+
 ---
 
 ## 🚀 Quick Start & Command Guide
@@ -173,7 +256,6 @@ python -m pytest test_formulas.py
 ### Train Machine Learning Models (Module 2)
 ```bash
 python train_cardio_model.py
-python train_diabetes_model.py
 ```
 
 ### Evaluate Digital Twins (Module 3)

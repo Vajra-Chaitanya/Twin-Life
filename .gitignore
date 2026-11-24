@@ -2,6 +2,8 @@
 .env
 
 # Python
+.venv/
+data/twinlife.sqlite3*
 __pycache__/
 *.pyc
 *.pyo

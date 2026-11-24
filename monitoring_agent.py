@@ -389,6 +389,13 @@ class MonitoringAgent:
             self.insurance_inputs = insurance_inputs
 
 
+def compare_snapshots(user_id: str, old: dict | None, new: dict) -> list[dict]:
+    """Apply the monitoring thresholds without starting a scheduler or loading models."""
+    holder = object.__new__(MonitoringAgent)
+    holder.user_id = user_id
+    return holder._compare_snapshots(old, new)
+
+
 # ======================================================================
 #  STANDALONE VERIFICATION (python monitoring_agent.py)
 # ======================================================================

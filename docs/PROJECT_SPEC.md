@@ -25,11 +25,11 @@ inputs for "what-if" comparisons.
 - Health model: scikit-learn (RandomForestClassifier) + SHAP for explainability
 - Formulas/rules: plain Python functions, no libraries needed
 - Orchestrator: LangGraph
-- LLM: Claude API (Anthropic SDK)
+- LLM: Claude API (Anthropic SDK) or gemini API
 - RAG: LangChain + ChromaDB + sentence-transformers (all-MiniLM-L6-v2)
 - Backend: FastAPI + PostgreSQL + SQLAlchemy
 - Scheduler: APScheduler (for the proactive Monitoring Agent)
-- Frontend: React + Vite + Tailwind + Recharts
+- Frontend: React + Vite + Tailwind + 
 - Simulation: NumPy (Monte Carlo for finance forecasting)
 - Daily-use layer: Twilio WhatsApp API, Web Speech API (voice), Claude API
   vision (receipt/prescription photo scanning)

@@ -51,6 +51,7 @@ TIER_ORDER: dict[str, list[str]] = {
 
 URGENCY_MAP: dict[str, str] = {
     "Low":       "routine monitoring, no immediate action needed",
+    "Medium":    "discuss glucose results with a healthcare professional",
     "Moderate":  "schedule a specialist consultation within 1-2 months",
     "Elevated":  "consult a specialist soon, within 2-4 weeks",
     "High":      "urgent -- seek specialist attention within 1-2 weeks",
@@ -225,7 +226,7 @@ class CombinedSimulator:
         if condition == "cardio":
             label = self.health_profile.get("cardio_risk", {}).get("label", "Low")
         elif condition == "diabetes":
-            label = self.health_profile.get("diabetes_risk", {}).get("label", "Low")
+            label = self.health_profile.get("diabetes_indicator", "Low")
         elif condition == "hypertension":
             label = self.health_profile.get("hypertension_stage", "Normal")
         else:

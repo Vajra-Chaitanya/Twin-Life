@@ -210,8 +210,18 @@ def purchase_impact_simulator(
     """
     disposable = finance_profile.get("disposable_income", 0)
     dti = finance_profile.get("dti_ratio", 0)
-    ef_months = finance_profile.get("emergency_fund_months", 0)
-    stability = finance_profile.get("financial_stability_score", 0)
+    monthly_income = finance_profile.get("monthly_income")
+    monthly_expenses = finance_profile.get("monthly_expenses")
+    savings_balance = finance_profile.get("savings_balance")
+
+    if purchase_cost < 0:
+        raise ValueError("purchase_cost must be non-negative")
+    if monthly_income is None or monthly_income <= 0:
+        raise ValueError("finance_profile must include a positive monthly_income")
+    if monthly_expenses is None or monthly_expenses < 0:
+        raise ValueError("finance_profile must include non-negative monthly_expenses")
+    if savings_balance is None or savings_balance < 0:
+        raise ValueError("finance_profile must include non-negative savings_balance")
 
     # Affordability check
     aff_score = affordability_score(disposable, 12, purchase_cost) if purchase_cost > 0 else float("inf")
@@ -219,27 +229,31 @@ def purchase_impact_simulator(
 
     # Impact analysis: what if they took a 12-month EMI?
     monthly_emi = purchase_cost / 12
-    # Approximate new DTI if they added this EMI
-    # (income is disposable + current expenses, back-calculate)
-    approx_income = disposable / max(1 - dti, 0.01) if dti < 1 else disposable * 10
-    new_dti = dti + (monthly_emi / max(approx_income, 1))
+    new_dti = dti + (monthly_emi / monthly_income)
+    new_dti_24 = dti + (purchase_cost / 24 / monthly_income)
 
     # Months needed to save the full amount
     months_to_save = purchase_cost / max(disposable, 1) if disposable > 0 else float("inf")
 
     # Emergency fund impact
-    if purchase_cost <= finance_profile.get("disposable_income", 0) * ef_months * 0.3:
-        ef_impact = "Minimal — purchase uses less than 30% of emergency fund"
-    elif purchase_cost <= finance_profile.get("disposable_income", 0) * ef_months:
+    remaining_savings = max(0, savings_balance - purchase_cost)
+    remaining_ef_months = (
+        remaining_savings / monthly_expenses if monthly_expenses > 0 else float("inf")
+    )
+    if purchase_cost <= savings_balance * 0.3:
+        ef_impact = "Minimal — purchase uses no more than 30% of liquid savings"
+    elif purchase_cost < savings_balance:
         ef_impact = "Moderate — would significantly reduce emergency reserves"
     else:
         ef_impact = "Severe — would deplete emergency fund entirely"
 
     impact = {
         "new_dti_if_emi": round(new_dti, 3),
+        "new_dti_if_emi_24months": round(new_dti_24, 3),
         "monthly_emi_12months": round(monthly_emi, 0),
         "months_to_save": round(months_to_save, 1),
         "emergency_fund_impact": ef_impact,
+        "emergency_fund_months_after_purchase": round(remaining_ef_months, 1),
     }
 
     # Generate ranked alternatives (only if not easily affordable)
@@ -270,7 +284,6 @@ def purchase_impact_simulator(
 
         # Alt 3: EMI split (24 months)
         emi_24 = purchase_cost / 24
-        new_dti_24 = dti + (emi_24 / max(approx_income, 1))
         alternatives.append({
             "rank": 3,
             "strategy": "EMI over 24 months",
@@ -575,6 +588,9 @@ if __name__ == "__main__":
         "emergency_fund_months": 4.0,
         "financial_stability_score": 60,
         "disposable_income": 22000,
+        "monthly_income": 100000,
+        "monthly_expenses": 78000,
+        "savings_balance": 312000,
     }
 
     for cost in [100_000, 500_000, 1_500_000]:
@@ -600,7 +616,7 @@ if __name__ == "__main__":
         "obesity_class": "Overweight (Pre-obese)",
         "hypertension_stage": "Stage 1",
         "cardio_risk": {"probability": 0.45, "label": "Elevated"},
-        "diabetes_risk": {"probability": 0.20, "label": "Moderate"},
+        "diabetes_indicator": "Medium",
         "overall_health_score": 52,
     }
 
