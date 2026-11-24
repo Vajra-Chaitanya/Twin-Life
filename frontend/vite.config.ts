@@ -6,7 +6,15 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: { dedupe: ["react", "react-dom"] },
   // Pre-bundle the lazily imported 3D stack so Vite never re-optimizes mid-session.
-  optimizeDeps: { include: ["three", "@react-three/fiber"] },
+  optimizeDeps: {
+    include: [
+      "three",
+      "@react-three/fiber",
+      "three/addons/loaders/GLTFLoader.js",
+      "three/addons/math/MeshSurfaceSampler.js",
+      "three/addons/utils/BufferGeometryUtils.js",
+    ],
+  },
   // three.js is ~900 kB but only loaded on demand by the hologram.
   build: { chunkSizeWarningLimit: 1000 },
   server: {

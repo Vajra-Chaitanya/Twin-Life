@@ -163,7 +163,7 @@ React 19 + Vite + TypeScript + Tailwind v4 + Framer Motion + React Three Fiber, 
 
 | Page | Highlights |
 |---|---|
-| Landing | 3D particle hologram whose heartbeat reflects live CVD risk (2D fallback without WebGL) |
+| Landing | Low-poly faceted head hologram (simplified from a real head scan by `frontend/scripts/lowpoly-face.mjs`) that assembles from a flickering web, with glowing edges and a light band (2D fallback without WebGL) |
 | Calibrate Twin | 4-step wizard, demo personas, live formula readout, "building your twin" sequence |
 | Dashboard | Score rings, CVD gauge, SHAP diverging chart, cash-flow, coverage and rider gaps, key signals |
 | What-If Lab | Parallel timelines (today vs. simulated), presets, Monte Carlo fan chart, purchase impact |
@@ -172,6 +172,8 @@ React 19 + Vite + TypeScript + Tailwind v4 + Framer Motion + React Three Fiber, 
 | Alerts | Watchdog timeline, unread badge, toasts |
 
 Global: **Ctrl+K** command palette, guided demo tour, motion toggle (respects reduced-motion by default), per-page code splitting.
+
+**Asset credit:** `frontend/public/models/LeePerrySmith.glb` is the *Infinite, 3D Head Scan* by Lee Perry-Smith, licensed under [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/), obtained from the three.js examples repository (license file alongside the model).
 
 ---
 

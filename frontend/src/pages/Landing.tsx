@@ -115,6 +115,9 @@ export function Landing() {
               <span className="font-mono text-champagne">{snapshot.health.overall_health_score}</span>
             </p>
           )}
+          <p className="mt-2 text-[10px] text-taupe/50">
+            3D head scan by Lee Perry-Smith (Infinite Realities), CC BY 3.0
+          </p>
         </motion.div>
       </section>
 

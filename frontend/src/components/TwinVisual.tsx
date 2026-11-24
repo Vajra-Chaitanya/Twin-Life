@@ -1,6 +1,6 @@
 import { Component, lazy, Suspense, type ReactNode } from "react";
 
-const HoloTwin = lazy(() => import("./HoloTwin"));
+const HoloTwin = lazy(() => import("./HoloFace"));
 
 function supportsWebGL(): boolean {
   try {
