@@ -1,5 +1,5 @@
 import { Canvas, useFrame, useLoader, useThree } from "@react-three/fiber";
-import { Suspense, useEffect, useMemo, useRef, type MutableRefObject, type RefObject } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState, type MutableRefObject, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import * as THREE from "three";
 import { prefersReducedMotion, useFullMotion } from "../lib/motion";
@@ -393,16 +393,36 @@ function HeadScene({ anchor, risk, animate, replay }: SceneProps) {
   );
 }
 
+/** True while the element is on screen and the tab is visible; the full-screen canvas idles otherwise. */
+function useOnScreen(ref: RefObject<HTMLElement | null>) {
+  const [inView, setInView] = useState(true);
+  const [tabVisible, setTabVisible] = useState(() => document.visibilityState === "visible");
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(([entry]) => setInView(entry.isIntersecting), { rootMargin: "100px" });
+    observer.observe(el);
+    const onVisibility = () => setTabVisible(document.visibilityState === "visible");
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      observer.disconnect();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [ref]);
+  return inView && tabVisible;
+}
+
 export default function HoloFace({ risk = 0.2 }: { risk?: number }) {
   useFullMotion();
-  const animate = !prefersReducedMotion();
   const anchor = useRef<HTMLDivElement>(null);
   const replay = useRef(0);
+  const visible = useOnScreen(anchor);
+  const animate = !prefersReducedMotion();
 
   return (
     <div
       ref={anchor}
-      className="relative h-[480px] w-[460px] max-w-full cursor-pointer"
+      className="relative aspect-[23/24] w-[460px] max-w-full cursor-pointer"
       role="img"
       aria-label="Holographic digital twin face"
       title="Click to re-form the twin"
@@ -415,7 +435,7 @@ export default function HoloFace({ risk = 0.2 }: { risk?: number }) {
             dpr={[1, 2]}
             camera={{ position: [0, 0, CAMERA_Z], fov: FOV }}
             gl={{ antialias: true, alpha: true, powerPreference: "high-performance" }}
-            frameloop={animate ? "always" : "demand"}
+            frameloop={animate && visible ? "always" : "demand"}
           >
             <Suspense fallback={null}>
               <HeadScene anchor={anchor} risk={risk} animate={animate} replay={replay} />

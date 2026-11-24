@@ -28,4 +28,10 @@ export const FEATURE_LABELS: Record<string, string> = {
   smoke: "Smoking",
   alco: "Alcohol",
   active: "Physical activity",
+  age: "Age",
+  hypertension: "Hypertension",
+  heart_disease: "Heart disease",
+  HbA1c_level: "HbA1c",
+  blood_glucose_level: "Blood glucose",
+  smoking: "Smoking history",
 };

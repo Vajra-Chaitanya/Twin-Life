@@ -1,0 +1,448 @@
+===============================================================================
+13. HEALTH TWIN
+===============================================================================
+
+13.1 Introduction
+
+The Health Twin is a digital representation of an individual's health profile.
+It continuously monitors the user's medical information, predicts disease
+risks, recommends preventive measures, and communicates with other Twins
+through the Orchestrator.
+
+The Health Twin updates itself whenever new health information such as blood
+reports, lifestyle changes, medications, or wearable data becomes available.
+
+Instead of storing only historical records, the Health Twin continuously
+simulates future health conditions and predicts possible risks.
+
+===============================================================================
+13.2 Responsibilities
+===============================================================================
+
+The Health Twin performs the following tasks:
+
+• Create a digital representation of the user's health.
+
+• Analyze uploaded medical reports.
+
+• Predict disease risks.
+
+• Recommend preventive actions.
+
+• Suggest doctor consultation.
+
+• Schedule medicine reminders.
+
+• Schedule doctor appointments.
+
+• Estimate future medical expenses.
+
+• Communicate with Finance Twin.
+
+• Communicate with Insurance Twin.
+
+===============================================================================
+13.3 User Inputs
+===============================================================================
+
+Basic Information
+
+• Name
+
+• Age
+
+• Gender
+
+• Height
+
+• Weight
+
+------------------------------------------------------------
+
+Lifestyle Information
+
+• Smoking
+
+• Alcohol
+
+• Exercise Frequency
+
+• Sleep Duration
+
+• Diet Type
+
+• Daily Water Intake
+
+------------------------------------------------------------
+
+Medical History
+
+• Diabetes
+
+• Hypertension
+
+• Heart Disease
+
+• Thyroid
+
+• Asthma
+
+• Previous Surgeries
+
+------------------------------------------------------------
+
+Family History
+
+Father
+
+Mother
+
+Sibling
+
+Select
+
+□ Diabetes
+
+□ Heart Disease
+
+□ Hypertension
+
+□ Cancer
+
+------------------------------------------------------------
+
+Laboratory Reports
+
+Users may either
+
+1. Upload PDF
+
+or
+
+2. Enter values manually.
+
+Collected Parameters
+
+• HbA1c
+
+• Blood Sugar
+
+• Blood Pressure
+
+• Total Cholesterol
+
+• HDL
+
+• LDL
+
+• Triglycerides
+
+===============================================================================
+13.4 Datasets Used
+===============================================================================
+
+Dataset 1
+
+Pima Indians Diabetes Dataset
+
+Purpose
+
+Diabetes Prediction
+
+Features
+
+Pregnancies (optional)
+
+Glucose
+
+Blood Pressure
+
+Skin Thickness
+
+Insulin
+
+BMI
+
+Diabetes Pedigree Function
+
+Age
+
+Target
+
+Diabetes Outcome
+
+------------------------------------------------------------
+
+Dataset 2
+
+UCI Heart Disease Dataset
+
+Purpose
+
+Heart Disease Prediction
+
+Features
+
+Age
+
+Sex
+
+Chest Pain Type
+
+Resting Blood Pressure
+
+Cholesterol
+
+Maximum Heart Rate
+
+Exercise Induced Angina
+
+Target
+
+Heart Disease
+
+------------------------------------------------------------
+
+Dataset 3
+
+Obesity Prediction Dataset
+
+Purpose
+
+Obesity Prediction
+
+Features
+
+Height
+
+Weight
+
+Age
+
+Exercise
+
+Diet
+
+Sleep
+
+Target
+
+Obesity Level
+
+------------------------------------------------------------
+
+Dataset 4 (Future)
+
+MIMIC-IV
+
+Purpose
+
+Large-scale Electronic Health Records
+
+Used only as literature reference because of its complexity.
+
+===============================================================================
+13.5 Machine Learning Models
+===============================================================================
+
+Initially, the following models will be trained and compared.
+
+Baseline Model
+
+• Logistic Regression
+
+Traditional Models
+
+• Decision Tree
+
+• Random Forest
+
+• XGBoost
+
+• LightGBM
+
+Optional
+
+• AutoGluon
+
+The best-performing model will be selected based on
+
+Accuracy
+
+Precision
+
+Recall
+
+F1 Score
+
+ROC-AUC
+
+===============================================================================
+13.6 Prediction Modules
+===============================================================================
+
+The Health Twin consists of multiple independent prediction modules.
+
+Health Twin
+
+│
+
+├── Diabetes Prediction Module
+
+├── Heart Disease Prediction Module
+
+├── Obesity Prediction Module
+
+├── Hypertension Prediction Module
+
+├── Lifestyle Analysis Module
+
+├── Health Score Module
+
+└── Future Risk Prediction Module
+
+Each module predicts a specific aspect of the user's health.
+
+===============================================================================
+13.7 Workflow
+===============================================================================
+
+User uploads health information
+
+↓
+
+Health Twin receives data
+
+↓
+
+Data Preprocessing
+
+↓
+
+Missing values handled
+
+↓
+
+Feature Engineering
+
+↓
+
+Prediction Models execute
+
+↓
+
+Disease Risks Generated
+
+↓
+
+Health Score Calculated
+
+↓
+
+Treatment Recommendation Generated
+
+↓
+
+Results stored inside Health Twin
+
+↓
+
+Health Twin sends results to Orchestrator
+
+===============================================================================
+13.8 Outputs
+===============================================================================
+
+The Health Twin generates
+
+• Health Score
+
+• Diabetes Risk
+
+• Heart Disease Risk
+
+• Obesity Risk
+
+• Hypertension Risk
+
+• Future Health Risk
+
+• Recommended Lifestyle Changes
+
+• Doctor Recommendation
+
+• Estimated Treatment Cost
+
+===============================================================================
+13.9 Communication with Other Twins
+===============================================================================
+
+The Health Twin communicates with
+
+Finance Twin
+
+Purpose
+
+Determine whether treatment is financially affordable.
+
+------------------------------------------------------------
+
+Insurance Twin
+
+Purpose
+
+Determine insurance coverage.
+
+------------------------------------------------------------
+
+Example
+
+Health Twin predicts
+
+Diabetes Risk = High
+
+↓
+
+Treatment Cost = ₹5000/month
+
+↓
+
+Finance Twin
+
+Monthly Budget = ₹3000
+
+↓
+
+Insurance Twin
+
+Coverage = ₹2000
+
+↓
+
+Negotiation Agent
+
+Final Recommendation
+
+Treatment can proceed with zero out-of-pocket expense.
+
+===============================================================================
+13.10 Future Enhancements
+===============================================================================
+
+Future versions of the Health Twin may include
+
+• Google Fit Integration
+
+• Fitbit Integration
+
+• Smartwatch Integration
+
+• Real-time Heart Rate Monitoring
+
+• Wearable Device Synchronization
+
+• Continuous Health Monitoring
+
+• AI-based Personalized Treatment Planning
+
+===============================================================================

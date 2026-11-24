@@ -1,0 +1,522 @@
+===============================================================================
+14. FINANCE TWIN
+===============================================================================
+
+14.1 Introduction
+
+The Finance Twin is a digital representation of an individual's financial
+status. It continuously monitors income, expenses, savings, loans,
+investments, and financial commitments to estimate the user's financial
+health and ability to support future healthcare and life decisions.
+
+Unlike traditional expense tracking applications, the Finance Twin does not
+only record transactions. It predicts future financial risks, evaluates
+affordability, estimates healthcare expenditure, and collaborates with the
+Health Twin to generate optimized life recommendations.
+
+===============================================================================
+14.2 Responsibilities
+===============================================================================
+
+The Finance Twin performs the following tasks:
+
+• Create a digital representation of the user's financial profile.
+
+• Analyze monthly income and expenses.
+
+• Monitor savings and investments.
+
+• Track loans and EMI payments.
+
+• Predict financial health.
+
+• Estimate future savings.
+
+• Calculate emergency fund status.
+
+• Evaluate affordability of healthcare recommendations.
+
+• Estimate future medical expenditure.
+
+• Communicate with Health Twin.
+
+• Communicate with Insurance Twin.
+
+===============================================================================
+14.3 User Inputs
+===============================================================================
+
+Personal Financial Information
+
+• Monthly Salary
+
+• Additional Income
+
+• Monthly Expenses
+
+• Savings
+
+• Investments
+
+• Emergency Fund
+
+------------------------------------------------------------
+
+Loans
+
+• Home Loan
+
+• Vehicle Loan
+
+• Education Loan
+
+• Personal Loan
+
+Loan Amount
+
+Interest Rate
+
+Remaining Tenure
+
+Monthly EMI
+
+------------------------------------------------------------
+
+Investments
+
+• Fixed Deposits
+
+• Mutual Funds
+
+• Stocks
+
+• Gold
+
+• Cryptocurrency (Optional)
+
+------------------------------------------------------------
+
+Financial Goals
+
+• Buy House
+
+• Buy Vehicle
+
+• Higher Education
+
+• Retirement
+
+• Emergency Savings
+
+===============================================================================
+14.4 Datasets Used
+===============================================================================
+
+Dataset 1
+
+Loan Prediction Dataset
+
+Purpose
+
+Loan Eligibility Prediction
+
+Features
+
+• Income
+
+• Loan Amount
+
+• Credit History
+
+• Dependents
+
+• Education
+
+• Property Area
+
+Target
+
+Loan Approval
+
+------------------------------------------------------------
+
+Dataset 2
+
+Credit Score Classification Dataset
+
+Purpose
+
+Credit Risk Prediction
+
+Features
+
+• Income
+
+• Outstanding Debt
+
+• Credit Utilization
+
+• Number of Loans
+
+• Payment History
+
+Target
+
+Credit Score
+
+------------------------------------------------------------
+
+Dataset 3
+
+Personal Finance Dataset
+
+Purpose
+
+Financial Health Prediction
+
+Features
+
+• Monthly Income
+
+• Monthly Expenses
+
+• Savings
+
+• Investments
+
+Target
+
+Financial Stability
+
+===============================================================================
+14.5 Machine Learning Models
+===============================================================================
+
+Baseline Model
+
+• Logistic Regression
+
+Traditional Models
+
+• Decision Tree
+
+• Random Forest
+
+• XGBoost
+
+• LightGBM
+
+Optional
+
+• AutoGluon
+
+Models are compared using
+
+• Accuracy
+
+• Precision
+
+• Recall
+
+• F1 Score
+
+• ROC-AUC
+
+===============================================================================
+14.6 Prediction Modules
+===============================================================================
+
+Finance Twin
+
+│
+
+├── Financial Health Module
+
+├── Credit Risk Module
+
+├── Loan Eligibility Module
+
+├── Savings Forecast Module
+
+├── Expense Analysis Module
+
+├── EMI Monitoring Module
+
+├── Medical Affordability Module
+
+├── Emergency Fund Module
+
+└── Future Finance Simulation Module
+
+===============================================================================
+14.7 Workflow
+===============================================================================
+
+User enters financial information
+
+↓
+
+Finance Twin receives data
+
+↓
+
+Data Cleaning
+
+↓
+
+Feature Engineering
+
+↓
+
+Financial Prediction Models
+
+↓
+
+Financial Health Score
+
+↓
+
+Savings Forecast
+
+↓
+
+Debt Risk
+
+↓
+
+Medical Affordability Analysis
+
+↓
+
+Results stored inside Finance Twin
+
+↓
+
+Finance Twin sends results to Orchestrator
+
+===============================================================================
+14.8 Outputs
+===============================================================================
+
+The Finance Twin generates
+
+• Financial Health Score
+
+• Credit Risk
+
+• Debt Risk
+
+• Loan Eligibility
+
+• Savings Forecast
+
+• Emergency Fund Status
+
+• Monthly Budget Analysis
+
+• Medical Affordability Score
+
+• Future Financial Risk
+
+===============================================================================
+14.9 Healthcare Affordability Analysis
+===============================================================================
+
+One of the major contributions of the Finance Twin is evaluating whether
+recommended healthcare treatments are financially affordable.
+
+Example
+
+Health Twin
+
+↓
+
+Recommended Treatment
+
+₹6000/month
+
+↓
+
+Finance Twin
+
+Monthly Disposable Income
+
+₹4000
+
+↓
+
+Insurance Twin
+
+Coverage
+
+₹2500
+
+↓
+
+Negotiation Agent
+
+↓
+
+Optimized Treatment Generated
+
+===============================================================================
+14.10 Financial Simulation
+===============================================================================
+
+The Finance Twin supports "What If" simulations.
+
+Example 1
+
+What happens if I buy a bike?
+
+↓
+
+Monthly EMI Added
+
+↓
+
+Savings Reduce
+
+↓
+
+Emergency Fund Reduces
+
+↓
+
+Future Financial Risk Increases
+
+------------------------------------------------------------
+
+Example 2
+
+What happens if I lose my job?
+
+↓
+
+Income Drops
+
+↓
+
+Savings Utilized
+
+↓
+
+Loan Repayment Risk
+
+↓
+
+Healthcare Affordability Reduced
+
+------------------------------------------------------------
+
+Example 3
+
+What happens if my medical expenses increase?
+
+↓
+
+Healthcare Cost
+
+↑
+
+↓
+
+Savings
+
+↓
+
+Emergency Fund
+
+↓
+
+Insurance Requirement
+
+===============================================================================
+14.11 Communication with Other Twins
+===============================================================================
+
+Health Twin
+
+↓
+
+Receives
+
+Treatment Cost
+
+Future Medical Expenses
+
+Lifestyle Recommendations
+
+------------------------------------------------------------
+
+Insurance Twin
+
+↓
+
+Receives
+
+Insurance Coverage
+
+Premium
+
+Claim Amount
+
+------------------------------------------------------------
+
+Example
+
+Health Twin
+
+Treatment Cost
+
+₹8000
+
+↓
+
+Finance Twin
+
+Budget
+
+₹5000
+
+↓
+
+Insurance Twin
+
+Coverage
+
+₹2500
+
+↓
+
+Negotiation Agent
+
+↓
+
+Final Treatment Plan
+
+===============================================================================
+14.12 Future Enhancements
+===============================================================================
+
+Future versions may include
+
+• Bank API Integration
+
+• UPI Transaction Analysis
+
+• SMS Transaction Parsing
+
+• AI Expense Categorization
+
+• Investment Portfolio Analysis
+
+• Tax Planning
+
+• Retirement Planning
+
+• Inflation Prediction
+
+• Real-time Financial Monitoring
+
+===============================================================================

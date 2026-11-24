@@ -75,7 +75,12 @@ def _call_gemini(
                     max_output_tokens=1500,
                 ),
             )
-            return response.candidates[0].content.parts[0].text.strip()
+            # Gemini can split one answer across several parts; join them all.
+            parts = response.candidates[0].content.parts or []
+            text = "".join(p.text or "" for p in parts).strip()
+            if not text:
+                raise RuntimeError("Gemini returned an empty response")
+            return text
         except Exception as e:
             error_str = str(e)
             if ("429" in error_str or "RESOURCE_EXHAUSTED" in error_str) and attempt < max_retries:
@@ -83,6 +88,9 @@ def _call_gemini(
                 print(f"    [Rate limited — waiting {wait}s before retry "
                       f"{attempt + 1}/{max_retries}...]")
                 time.sleep(wait)
+            elif any(s in error_str for s in ("503", "UNAVAILABLE", "overloaded", "500", "INTERNAL", "empty response")) \
+                    and attempt < max_retries:
+                time.sleep(2 * (attempt + 1))  # transient server-side failure
             else:
                 raise
 
@@ -90,10 +98,20 @@ def _call_gemini(
 # ---------------------------------------------------------------------------
 #  GENERATE EXPLANATION
 # ---------------------------------------------------------------------------
+def _pct(value) -> str:
+    return f"{value * 100:.0f}%" if isinstance(value, (int, float)) else str(value)
+
+
+def _pct1(value) -> str:
+    return f"{value * 100:.1f}%" if isinstance(value, (int, float)) else "N/A"
+
+
 def generate_explanation(
     twin_outputs: dict,
     shap_features: list[dict],
     rag_chunks: list[str],
+    question: str | None = None,
+    history: list[dict] | None = None,
 ) -> str:
     """Generate a plain-language explanation combining scores, SHAP, and RAG.
 
@@ -103,6 +121,8 @@ def generate_explanation(
         shap_features: List of SHAP feature dicts from HealthTwin:
                        [{"feature": str, "impact": float, "model": str}, ...]
         rag_chunks:   List of retrieved guideline text chunks from RAGAgent.
+        question:     The user's current question, answered directly.
+        history:      Earlier turns, oldest first: [{"query": str, "answer": str}].
 
     Returns:
         A warm, cited, plain-language explanation string.
@@ -110,22 +130,62 @@ def generate_explanation(
     client = _get_gemini_client()
 
     system_prompt = (
-        "You are a compassionate health and financial wellness advisor for the "
-        "TwinLife AI digital twin platform. Your task is to write a SHORT, WARM, "
-        "PLAIN-LANGUAGE explanation for the user based on their computed scores, "
-        "the key factors driving their health prediction (from SHAP analysis), "
-        "and relevant guideline excerpts (from medical/financial guidelines).\n\n"
+        "You are the TwinLife AI advisor. You answer a user's question about their "
+        "own health, money and insurance using ONLY the computed data provided.\n\n"
+        "ANSWER FORMAT (markdown, under 220 words):\n"
+        "1. First line: a direct verdict in bold that answers the question "
+        "(e.g. '**Not advisable at ₹15,000/month** — it pushes your debt load past the safe limit.'). "
+        "If COMPUTED SCENARIO is present, its verdict decides this line. The verdict must agree with the "
+        "numbers that follow (never say 'No' and then show the target is met).\n"
+        "2. Section 2 depends on the question:\n"
+        "   - If a COMPUTED SCENARIO, JUST RECORDED UPDATES or JUST REVERTED UPDATES exist: 'What changes' — 2-4 "
+        "bullets with exact before → after numbers copied from them.\n"
+        "   - Otherwise (a status question or symptom): 'Where you stand' — 2-4 bullets of current values "
+        "with their targets (e.g. 'Emergency fund: 8.2 months (target 6)'). Never write an arrow or a 'before' "
+        "value when nothing changed, and never use 0 as a starting value.\n"
+        "3. 'Why it matters' — one or two sentences linking the numbers to the thresholds or guidelines "
+        "(cite guidelines naturally, e.g. 'AHA guidelines recommend...').\n"
+        "4. 'What you can do' — 2-3 numbered, specific actions with amounts or targets from the data.\n"
+        "5. One short italic disclaimer line.\n\n"
         "RULES:\n"
-        "1. Do NOT invent any numeric claims not provided in the input data.\n"
-        "2. When referencing guideline information, cite the source naturally "
-        "(e.g., 'According to AHA guidelines...' or 'As per financial planning "
-        "best practices...').\n"
-        "3. Keep the tone warm, supportive, and non-alarming.\n"
-        "4. Use simple language — avoid medical jargon where possible.\n"
-        "5. End with 1-2 actionable next steps the user can take.\n"
-        "6. Include a brief disclaimer that this is illustrative guidance, "
-        "not licensed medical or financial advice.\n"
-        "7. Keep the response under 300 words."
+        "- Never invent numbers; use only values given. Show ratios as percentages (32%, not 0.32; 68%, not 0.68) "
+        "and money as ₹ amounts.\n"
+        "- Symptoms (weakness, dizziness, pain, breathlessness): give 2-3 safe immediate steps, the warning "
+        "signs that need emergency care, and relevant personal risk factors from the data; do not list "
+        "unrelated financial numbers.\n"
+        "- A relative's illness is family history: explain how it adds to the user's own risk; never treat it "
+        "as the user's diagnosis.\n"
+        "- Never use vague phrases like 'a bit higher', 'moderate impact' or 'somewhat' without the number.\n"
+        "- No greetings, no praise filler, no repeating the question.\n"
+        "- If an essential detail is missing (e.g. loan tenure or cost), state the assumption used and end "
+        "with ONE short clarifying question.\n"
+        "- Use the CONVERSATION SO FAR to understand follow-ups (resolve 'it', 'that', 'what about...'); "
+        "build on earlier answers instead of repeating them, and stay consistent with them.\n"
+        "- If no CURRENT QUESTION is given, summarise the most important findings in the same format.\n"
+        "- If JUST RECORDED UPDATES are present, the user told you something that happened. Start with a bold "
+        "line confirming the twin was updated, list the before → after changes, then explain what it means "
+        "for them now. Be empathetic for health events.\n"
+        "- Only say the twin, dashboard or data was updated if JUST RECORDED UPDATES or JUST REVERTED UPDATES "
+        "are present in THIS prompt. If the user asks whether something was updated, answer from RECENT LIFE "
+        "EVENTS: if it is not listed there, say clearly it was NOT saved and ask them to restate it with the amount.\n"
+        "- The twin data sections are the saved truth. If numbers in CONVERSATION SO FAR differ from them, the "
+        "conversation is wrong; never repeat unsaved figures as current values.\n"
+        "- If DOMAIN FOCUS is present, answer ONLY for that twin. If the question belongs to another twin "
+        "(e.g. a money question in the Health Twin chat), reply in one or two lines that this chat covers only "
+        "that twin and they should ask on the matching Twin page (Health, Financial or Insurance); do not answer it.\n"
+        "- If PAYMENTS & RENEWALS NEEDING ATTENTION lists OVERDUE, EXPIRED, MISSING or OUTSTANDING items relevant to "
+        "the question (or the user asks what they owe), mention them with exact amounts and dates.\n"
+        "- If JUST REVERTED UPDATES are present, the user asked to undo them: open with a bold line confirming "
+        "exactly what was reverted, list the before → after changes, and say the dashboard and history now "
+        "reflect it. Do not re-advise on the reverted item.\n"
+        "- If PENDING QUESTIONS are present, ask them clearly (one bullet each) so the twin can be updated. "
+        "If there are NO JUST RECORDED UPDATES, the twin was NOT changed: never say it was updated, open with "
+        "a bold line asking for the missing detail, skip 'What changes', and briefly say what you will "
+        "recompute once they answer.\n"
+        "- Copy dates exactly as given; a commitment's end date is the date after 'until'.\n"
+        "- When the user plans something new, ALWAYS factor in ACTIVE COMMITMENTS and RECENT LIFE EVENTS "
+        "(e.g. 'you already pay ₹15,000/month for your car until 2031 and had a heart attack in Nov 2026'), "
+        "and say what they are locked into before advising."
     )
 
     # Build the user prompt with all available data
@@ -133,36 +193,57 @@ def generate_explanation(
 
     if "health" in twin_outputs:
         hp = twin_outputs["health"]
-        sections.append(
-            "=== HEALTH PROFILE ===\n"
-            f"BMI: {hp.get('bmi')} ({hp.get('obesity_class')})\n"
-            f"Blood Pressure: {hp.get('hypertension_stage')}\n"
-            f"Cardiovascular Risk: {hp.get('cardio_risk', {}).get('probability', 'N/A')} "
-            f"({hp.get('cardio_risk', {}).get('label', 'N/A')})\n"
-            f"Diabetes Indicator: {hp.get('diabetes_indicator', 'N/A')}\n"
-            f"Overall Health Score: {hp.get('overall_health_score')}/100"
-        )
+        cardio = hp.get("cardio_risk") or {}
+        diabetes = hp.get("diabetes_risk") or {}
+        lines = [
+            f"BMI: {hp.get('bmi')} ({hp.get('obesity_class')})",
+            f"Blood Pressure: {hp.get('hypertension_stage')}",
+            f"Cardiovascular risk (ML model): {_pct1(cardio.get('probability'))} ({cardio.get('label', 'N/A')})",
+            f"Glucose indicator: {hp.get('diabetes_indicator', 'N/A')}",
+        ]
+        if diabetes:
+            lines.append(
+                f"Diabetes risk (ML model): {_pct1(diabetes.get('probability'))} ({diabetes.get('label')}); "
+                f"HbA1c {diabetes.get('hba1c')}%{' (estimated from glucose)' if diabetes.get('hba1c_estimated') else ''}"
+                + ("; ALREADY DIAGNOSED with diabetes" if diabetes.get("diagnosed") else "")
+            )
+        if hp.get("conditions"):
+            lines.append(f"Diagnosed conditions: {', '.join(c.replace('_', ' ') for c in hp['conditions'])}")
+        lines.append(f"Overall Health Score: {hp.get('overall_health_score')}/100")
+        sections.append("=== HEALTH PROFILE ===\n" + "\n".join(lines))
 
     if "finance" in twin_outputs:
         fp = twin_outputs["finance"]
         sections.append(
             "=== FINANCE PROFILE ===\n"
-            f"DTI Ratio: {fp.get('dti_ratio')}\n"
-            f"Savings Rate: {fp.get('savings_rate')}\n"
-            f"Emergency Fund: {fp.get('emergency_fund_months')} months\n"
+            f"Monthly income: Rs.{fp.get('monthly_income', 0):,.0f}\n"
+            f"Monthly living expenses: Rs.{fp.get('monthly_expenses', 0):,.0f}\n"
+            f"Free cash after expenses and EMIs: Rs.{fp.get('disposable_income', 0):,.0f}/month\n"
+            f"Savings balance: Rs.{fp.get('savings_balance', 0):,.0f}\n"
+            f"Debt-to-income: {_pct(fp.get('dti_ratio'))} (comfortable <= 36%, lender limit 43%)\n"
+            f"Savings rate: {_pct(fp.get('savings_rate'))}\n"
+            f"Emergency fund: {fp.get('emergency_fund_months')} months (target 6)\n"
             f"Financial Stability Score: {fp.get('financial_stability_score')}/100"
         )
 
     if "insurance" in twin_outputs:
         ip = twin_outputs["insurance"]
-        sections.append(
-            "=== INSURANCE PROFILE ===\n"
-            f"Estimated Future Cost: Rs.{ip.get('estimated_future_cost', 0):,.0f}\n"
-            f"Coverage Ratio: {ip.get('coverage_adequacy_ratio')}\n"
-            f"Premium Ratio: {ip.get('premium_affordability_ratio')}\n"
-            f"Rider Gaps: {ip.get('rider_analysis', {}).get('gaps', [])}\n"
-            f"Insurance Score: {ip.get('insurance_adequacy_score')}/100"
-        )
+        lines = [
+            f"Projected 5-year medical cost: Rs.{ip.get('estimated_future_cost', 0):,.0f}",
+            f"Health cover vs projected cost: {_pct(ip.get('coverage_adequacy_ratio'))}",
+            f"Health premium as share of income: {_pct1(ip.get('premium_affordability_ratio'))}",
+            f"Rider gaps: {', '.join(ip.get('rider_analysis', {}).get('gaps', [])) or 'none'}",
+            f"Insurance Score (health cover): {ip.get('insurance_adequacy_score')}/100",
+        ]
+        portfolio = ip.get("portfolio") or {}
+        for p in portfolio.get("policies", []):
+            lines.append(f"Policy: {p.get('name')} ({p.get('type')}), cover Rs.{p.get('cover', 0):,.0f}, "
+                         f"premium Rs.{p.get('premium', 0):,.0f}/yr, renews {p.get('renewal_date') or 'unknown'}")
+        if portfolio:
+            lines.append(f"Total annual premium (all policies): Rs.{portfolio.get('total_annual_premium', 0):,.0f}")
+            lines.append(f"Life cover: Rs.{portfolio.get('life_cover', 0):,.0f} vs about Rs.{portfolio.get('life_cover_recommended', 0):,.0f} "
+                         "recommended (10x annual income)")
+        sections.append("=== INSURANCE PROFILE ===\n" + "\n".join(lines))
 
     if "simulation" in twin_outputs and twin_outputs["simulation"]:
         sim = twin_outputs["simulation"]
@@ -171,6 +252,55 @@ def generate_explanation(
                 "=== TREATMENT SIMULATION ===\n"
                 f"Agent Recommendation:\n{sim['recommendation'][:500]}"
             )
+
+    for scenario in twin_outputs.get("scenarios") or []:
+        lines = [f"Scenario: {scenario.get('headline')}", f"Verdict: {str(scenario.get('verdict', '')).upper()}"]
+        lines += [f"- {fact}" for fact in scenario.get("facts", [])]
+        if scenario.get("actions"):
+            lines.append("Computed actions:")
+            lines += [f"- {action}" for action in scenario["actions"]]
+        if scenario.get("assumptions"):
+            lines.append("Assumptions: " + "; ".join(scenario["assumptions"]))
+        sections.append("=== COMPUTED SCENARIO (exact, use these numbers) ===\n" + "\n".join(lines))
+
+    life = twin_outputs.get("life_context") or {}
+    if life.get("dues"):
+        sections.append("=== PAYMENTS & RENEWALS NEEDING ATTENTION ===\n" + "\n".join(
+            f"- [{d['status'].upper()}] {d['title']}: Rs.{d.get('amount') or 0:,.0f}"
+            + (f", due {d['due_date']}" if d.get("due_date") else "") + f" ({d['detail']})"
+            for d in life["dues"]
+        ))
+    if twin_outputs.get("domain_focus"):
+        focus = twin_outputs["domain_focus"]
+        sections.append(f"=== DOMAIN FOCUS: {focus.upper()} TWIN ===\n"
+                        f"This chat belongs to the {focus.capitalize()} Twin page. Answer only about {focus}.")
+    if life.get("commitments"):
+        sections.append("=== ACTIVE COMMITMENTS ===\n" + "\n".join(
+            f"- Owes {c['lender']} Rs.{c.get('principal', 0):,.0f} (no repayment plan yet)" if c.get("informal") else
+            f"- {c.get('item', 'loan').title()} EMI Rs.{c.get('emi', 0):,.0f}/month"
+            + (f" until {c['end']}" if c.get("end") else " (tenure not recorded)")
+            for c in life["commitments"]
+        ))
+    if life.get("recent_events"):
+        sections.append("=== RECENT LIFE EVENTS ===\n" + "\n".join(
+            f"- {e['date']}: {e['summary']}" for e in life["recent_events"]
+        ))
+    elif life:
+        sections.append("=== RECENT LIFE EVENTS ===\nNone saved.")
+    if life.get("just_recorded"):
+        lines = []
+        for e in life["just_recorded"]:
+            lines.append(f"- {e['summary']}")
+            lines += [f"    {c['label']}: {c['before']} -> {c['after']}" for c in e.get("changes", [])]
+        sections.append("=== JUST RECORDED UPDATES (twin already recomputed) ===\n" + "\n".join(lines))
+    if life.get("just_reverted"):
+        changes = life["just_reverted"][0].get("changes", [])
+        sections.append("=== JUST REVERTED UPDATES (twin already recomputed) ===\n" + "\n".join(
+            [f"- Reverted: {e['summary']}" for e in life["just_reverted"]]
+            + [f"    {c['label']}: {c['before']} -> {c['after']}" for c in changes]
+        ))
+    if life.get("pending_questions"):
+        sections.append("=== PENDING QUESTIONS (ask the user) ===\n" + "\n".join(f"- {q}" for q in life["pending_questions"]))
 
     if shap_features:
         shap_text = "\n".join(
@@ -183,9 +313,20 @@ def generate_explanation(
         rag_text = "\n---\n".join(chunk[:500] for chunk in rag_chunks[:3])
         sections.append(f"=== GUIDELINE REFERENCES ===\n{rag_text}")
 
+    if history:
+        turns = "\n\n".join(
+            f"User: {turn.get('query', '')}\nAdvisor: {str(turn.get('answer', ''))[:600]}"
+            for turn in history[-3:]
+        )
+        sections.append(f"=== CONVERSATION SO FAR ===\n{turns}")
+
+    if question:
+        sections.append(f"=== CURRENT QUESTION ===\n{question}")
+
     user_prompt = (
-        "Based on the following data, write a personalized health and "
-        "financial wellness explanation for the user:\n\n"
+        "Based on the following data, answer the user's current question "
+        "(or, if none is given, write a personalized health and financial "
+        "wellness explanation):\n\n"
         + "\n\n".join(sections)
     )
 

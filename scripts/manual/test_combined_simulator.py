@@ -35,8 +35,11 @@ if not os.environ.get("GEMINI_API_KEY"):
     print('     PowerShell:  $env:GEMINI_API_KEY = "your-key-here"')
     print("     CMD:         set GEMINI_API_KEY=your-key-here")
     print()
-    print("  3. Run again:   python test_combined_simulator.py")
+    print("  3. Run again:   python scripts/manual/test_combined_simulator.py")
     sys.exit(1)
+
+# App modules live in the project root, two levels up.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from health_twin import HealthTwin
 from finance_twin import FinanceTwin

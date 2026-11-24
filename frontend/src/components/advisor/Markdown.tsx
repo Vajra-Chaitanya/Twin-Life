@@ -17,7 +17,9 @@ type Block = { kind: "p" | "ul" | "ol" | "h"; lines: string[] };
 
 function toBlocks(text: string): Block[] {
   const blocks: Block[] = [];
-  for (const raw of text.split(/\r?\n/)) {
+  // LLMs sometimes run list items together ("...zone.2. Next"); split them back onto their own lines.
+  const normalized = text.replace(/([.!?:])\s*(\d{1,2}[.)]\s+\S)/g, "$1\n$2");
+  for (const raw of normalized.split(/\r?\n/)) {
     const line = raw.trim();
     if (!line) {
       blocks.push({ kind: "p", lines: [] });

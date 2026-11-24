@@ -1,0 +1,344 @@
+===============================================================================
+15. INSURANCE TWIN
+===============================================================================
+
+15.1 Introduction
+
+The Insurance Twin is a digital representation of an individual's health
+insurance profile. It continuously monitors insurance policies, coverage,
+claim limits, premium payments, and eligibility conditions to estimate
+medical coverage and out-of-pocket expenses.
+
+Unlike traditional insurance applications that simply store policy details,
+the Insurance Twin actively collaborates with the Health Twin and Finance
+Twin to optimize healthcare affordability and reduce financial burden.
+
+===============================================================================
+15.2 Responsibilities
+===============================================================================
+
+The Insurance Twin performs the following tasks:
+
+• Store insurance policy information.
+
+• Analyze insurance coverage.
+
+• Estimate claim eligibility.
+
+• Calculate out-of-pocket medical expenses.
+
+• Compare treatment cost with insurance coverage.
+
+• Monitor policy expiry.
+
+• Send premium renewal reminders.
+
+• Suggest better insurance plans.
+
+• Communicate with Health Twin.
+
+• Communicate with Finance Twin.
+
+===============================================================================
+15.3 User Inputs
+===============================================================================
+
+Insurance Details
+
+• Insurance Company
+
+• Policy Number
+
+• Policy Type
+
+• Coverage Amount
+
+• Premium Amount
+
+• Policy Expiry Date
+
+• Claim Limit
+
+• Network Hospitals
+
+------------------------------------------------------------
+
+Optional Upload
+
+User uploads
+
+Insurance Policy PDF
+
+↓
+
+OCR extracts
+
+Coverage
+
+Premium
+
+Diseases Covered
+
+Waiting Period
+
+Claim Limit
+
+Policy Expiry
+
+===============================================================================
+15.4 Data Processing
+===============================================================================
+
+After receiving policy information,
+
+the Insurance Twin performs
+
+• Policy Validation
+
+• Coverage Extraction
+
+• Disease Coverage Analysis
+
+• Premium Analysis
+
+• Claim Eligibility Analysis
+
+• Out-of-pocket Cost Estimation
+
+===============================================================================
+15.5 Rule Engine
+===============================================================================
+
+Unlike Health and Finance Twins,
+
+the Insurance Twin initially uses a Rule Engine.
+
+Example
+
+Treatment Cost = ₹50,000
+
+Insurance Coverage = ₹40,000
+
+↓
+
+Out-of-pocket Expense
+
+₹10,000
+
+------------------------------------------------------------
+
+Example
+
+Disease Covered?
+
+YES
+
+↓
+
+Claim Eligible
+
+------------------------------------------------------------
+
+Disease Covered?
+
+NO
+
+↓
+
+User Pays Full Amount
+
+===============================================================================
+15.6 Prediction Modules
+===============================================================================
+
+Insurance Twin
+
+│
+
+├── Coverage Analysis Module
+
+├── Claim Eligibility Module
+
+├── Medical Cost Estimation Module
+
+├── Premium Monitoring Module
+
+├── Renewal Reminder Module
+
+├── Policy Recommendation Module
+
+└── Healthcare Affordability Module
+
+===============================================================================
+15.7 Workflow
+===============================================================================
+
+User uploads insurance policy
+
+↓
+
+Insurance Twin extracts information
+
+↓
+
+Coverage Analysis
+
+↓
+
+Treatment Cost Comparison
+
+↓
+
+Claim Eligibility
+
+↓
+
+Medical Expense Estimation
+
+↓
+
+Results stored
+
+↓
+
+Insurance Twin sends information to Orchestrator
+
+===============================================================================
+15.8 Outputs
+===============================================================================
+
+Insurance Twin generates
+
+• Coverage Status
+
+• Claim Eligibility
+
+• Out-of-pocket Expense
+
+• Premium Due Date
+
+• Policy Expiry Alert
+
+• Better Insurance Suggestions
+
+===============================================================================
+15.9 Communication with Health Twin
+===============================================================================
+
+Health Twin predicts
+
+Treatment Required
+
+↓
+
+Insurance Twin checks
+
+Coverage
+
+↓
+
+If Covered
+
+Treatment Approved
+
+------------------------------------------------------------
+
+If Not Covered
+
+Health Twin receives feedback
+
+↓
+
+Suggest Alternative Treatment
+
+===============================================================================
+15.10 Communication with Finance Twin
+===============================================================================
+
+Finance Twin estimates
+
+Monthly Budget
+
+↓
+
+Insurance Twin estimates
+
+Remaining Medical Expense
+
+↓
+
+Finance Twin determines
+
+Whether user can afford treatment
+
+===============================================================================
+15.11 Example Scenario
+===============================================================================
+
+Health Twin
+
+↓
+
+Treatment Required
+
+₹80,000
+
+↓
+
+Insurance Twin
+
+Coverage
+
+₹50,000
+
+↓
+
+Remaining Expense
+
+₹30,000
+
+↓
+
+Finance Twin
+
+Savings
+
+₹20,000
+
+↓
+
+Negotiation Agent
+
+↓
+
+Suggests
+
+• Installment Treatment
+
+or
+
+• Alternate Hospital
+
+or
+
+• Government Scheme
+
+===============================================================================
+15.12 Future Enhancements
+===============================================================================
+
+Future versions may include
+
+• Automatic Policy Comparison
+
+• Multiple Insurance Policies
+
+• Claim Prediction
+
+• Insurance Fraud Detection
+
+• Government Scheme Eligibility
+
+• Hospital Network Recommendation
+
+===============================================================================

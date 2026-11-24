@@ -1,6 +1,7 @@
 export type Gender = "male" | "female";
 
 export type HealthInputs = {
+  conditions?: string[];
   age: number;
   gender: Gender;
   height_cm: number;
@@ -26,7 +27,9 @@ export type FinanceInputs = {
 export type InsuranceInputs = {
   sum_insured: number;
   annual_premium: number;
+  annual_income?: number | null;
   existing_riders: string[];
+  policies?: Policy[];
 };
 
 export type OnboardPayload = {
@@ -38,12 +41,18 @@ export type OnboardPayload = {
 
 export type ShapFeature = { feature: string; impact: number; model: string };
 
+export type DiabetesRisk = { probability: number; label: string; hba1c: number; hba1c_estimated: boolean; diagnosed: boolean };
+
 export type HealthProfile = {
   bmi: number;
   obesity_class: string;
   hypertension_stage: string;
   cardio_risk: { probability: number; label: string };
   diabetes_indicator: string;
+  diabetes_risk?: DiabetesRisk | null;
+  diabetes_shap?: ShapFeature[];
+  conditions?: string[];
+  condition_penalty?: number;
   framingham_10yr_risk: number;
   overall_health_score: number;
   shap_top_features: ShapFeature[];
@@ -67,7 +76,31 @@ export type InsuranceProfile = {
   premium_affordability_ratio: number;
   rider_analysis: { recommended: string[]; existing: string[]; gaps: string[]; gap_count: number };
   insurance_adequacy_score: number;
+  portfolio?: Portfolio;
   disclaimer: string;
+};
+
+export type PolicyType = "vehicle" | "life" | "home" | "travel" | "health_topup" | "gadget" | "other";
+export type Policy = { type: PolicyType; name: string; cover: number; premium: number; renewal_date: string | null };
+export type Portfolio = {
+  policies: Policy[];
+  health_cover: number;
+  total_annual_premium: number;
+  life_cover: number;
+  life_cover_recommended: number;
+  life_cover_gap: number;
+  types_held: string[];
+};
+
+export type DueStatus = "overdue" | "expired" | "missing" | "outstanding" | "due_soon" | "upcoming";
+export type Due = {
+  kind: "instalment" | "debt" | "receivable" | "renewal" | "missing_policy";
+  domain: Twin;
+  title: string;
+  amount: number;
+  due_date: string | null;
+  status: DueStatus;
+  detail: string;
 };
 
 export type Snapshot = {
@@ -90,7 +123,8 @@ export type Notification = {
   severity: "info" | "warning";
   message: string;
   data: Record<string, unknown>;
-  snapshot_id: number;
+  snapshot_id: number | null;
+  domain?: Twin;
   read: boolean;
 };
 
@@ -104,6 +138,61 @@ export type ChatMessage = {
   narration_error: string | null;
   citations: { source: string; score: number | null; excerpt: string }[];
   simulation: null | { error: string } | { recommendation: string; tool_trace: ToolCall[]; iterations: number };
+  thread_id?: string;
+  domain?: Twin | null;
+  refined_query?: string | null;
+  context_turns?: number;
+  scenarios?: Scenario[];
+  updates?: LifeEvent[];
+  reverted?: { id: number; summary: string; changes: LifeEvent["changes"] }[];
+  pending_questions?: string[];
+};
+
+export type Commitment = {
+  item: string;
+  emi: number;
+  months?: number | null;
+  start?: string;
+  end?: string | null;
+  lender?: string;
+  principal?: number;
+  informal?: boolean;
+  receivable?: boolean;
+};
+
+export type Twin = "health" | "finance" | "insurance";
+
+export type LifeEvent = {
+  id: number;
+  created_at: string;
+  type: string;
+  summary: string;
+  domains: Twin[];
+  log?: boolean;
+  changes: { label: string; before: number | null; after: number | null }[];
+  commitment?: Commitment | null;
+  alerts_generated?: number;
+  snapshot_id: number | null;
+  undone: boolean;
+};
+
+export type Scenario = {
+  kind: string;
+  verdict: string;
+  headline: string;
+  facts: string[];
+  actions: string[];
+  assumptions: string[];
+  metrics: { label: string; before: string; after: string; better: boolean | null }[];
+};
+
+export type ChatThread = {
+  thread_id: string;
+  title: string;
+  messages: number;
+  updated_at: string;
+  created_at?: string;
+  domain?: Twin | null;
 };
 
 export type SavingsBand = { month: number; p10: number; median: number; p90: number };

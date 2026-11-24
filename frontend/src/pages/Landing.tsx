@@ -72,7 +72,7 @@ export function Landing() {
         </div>
       </header>
 
-      <section className="mx-auto grid max-w-7xl items-center gap-10 px-6 pt-6 pb-16 lg:grid-cols-2">
+      <section className="mx-auto grid max-w-7xl grid-cols-1 items-center gap-10 px-6 pt-6 pb-16 lg:grid-cols-2">
         <motion.div variants={container} initial="hidden" animate="show">
           <motion.span
             variants={item}
@@ -102,20 +102,48 @@ export function Landing() {
         </motion.div>
 
         <motion.div
-          className="flex flex-col items-center"
+          className="flex min-w-0 flex-col items-center"
           initial={{ opacity: 0, scale: 0.85 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ duration: 1.2, ease: [0.22, 1, 0.36, 1] }}
         >
           <TwinVisual risk={snapshot?.health.cardio_risk.probability} fallback={<TwinOrb />} />
           {snapshot && (
-            <p className="glass -mt-4 rounded-full px-4 py-1.5 text-xs text-taupe">
-              Live twin <span className="font-mono text-champagne">{snapshot.user_id}</span> · CVD risk{" "}
-              <span className="font-mono text-champagne">{(snapshot.health.cardio_risk.probability * 100).toFixed(1)}%</span> · health{" "}
-              <span className="font-mono text-champagne">{snapshot.health.overall_health_score}</span>
-            </p>
+            <>
+              <motion.h2
+                className="-mt-6 mb-3 px-2 text-center font-display text-3xl font-bold tracking-wide sm:text-4xl md:text-5xl"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: [0, 1, 0.82, 1], y: 0 }}
+                transition={{ duration: 1.4, delay: 0.6, times: [0, 0.5, 0.62, 1] }}
+              >
+                <span style={{ color: "#D4AF37", textShadow: "0 0 10px rgb(212 175 55 / 0.8), 0 0 26px rgb(212 175 55 / 0.5)" }}>Twin:</span>{" "}
+                <span style={{ color: "#FFFFFF", textShadow: "0 0 10px rgb(255 255 255 / 0.55), 0 0 24px rgb(212 175 55 / 0.35)" }}>
+                  {snapshot.user_id}
+                </span>
+              </motion.h2>
+              <div className="flex flex-wrap justify-center gap-x-6 gap-y-2 sm:gap-x-8">
+                {[
+                  { label: "Health", value: snapshot.health.overall_health_score, color: "#E0A899" },
+                  { label: "Financial", value: snapshot.finance.financial_stability_score, color: "#D4AF37" },
+                  { label: "Insurance", value: snapshot.insurance.insurance_adequacy_score, color: "#C9CED6" },
+                ].map((s, i) => (
+                  <motion.div
+                    key={s.label}
+                    className="flex flex-col items-center"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.9 + i * 0.12 }}
+                  >
+                    <span className="font-display text-3xl font-bold" style={{ color: s.color, textShadow: `0 0 12px ${s.color}88` }}>
+                      {s.value}
+                    </span>
+                    <span className="text-[10px] tracking-widest text-taupe uppercase">{s.label}</span>
+                  </motion.div>
+                ))}
+              </div>
+            </>
           )}
-          <p className="mt-2 text-[10px] text-taupe/50">
+          <p className="mt-2 px-4 text-center text-[10px] text-taupe/50">
             3D head scan by Lee Perry-Smith (Infinite Realities), CC BY 3.0
           </p>
         </motion.div>

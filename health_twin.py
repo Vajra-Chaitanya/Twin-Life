@@ -38,6 +38,21 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # ---------------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CARDIO_MODEL_PATH = os.path.join(BASE_DIR, "models", "cardio_model.pkl")
+DIABETES_MODEL_PATH = os.path.join(BASE_DIR, "models", "diabetes_model.pkl")
+DIABETES_COLS_PATH = os.path.join(BASE_DIR, "models", "diabetes_feature_cols.pkl")
+# Conditions that the diabetes dataset records as heart disease.
+HEART_CONDITIONS = {"heart_attack", "heart_disease", "stroke"}
+
+# Health-score points removed per diagnosed condition (total capped at 35); illustrative weights.
+CONDITION_PENALTIES = {
+    "heart_attack": 20,
+    "stroke": 20,
+    "heart_disease": 15,
+    "cancer": 20,
+    "kidney_disease": 15,
+    "diabetes": 10,
+    "hypertension": 5,
+}
 
 # Cardio model feature order (must match train_cardio_model.py)
 CARDIO_FEATURES = [
@@ -64,6 +79,12 @@ class HealthTwin:
     def __init__(self) -> None:
         """Load the pre-trained cardiovascular model from disk."""
         self.cardio_model = joblib.load(CARDIO_MODEL_PATH)
+        self.diabetes_model = None
+        self.diabetes_cols: list[str] = []
+        if os.path.exists(DIABETES_MODEL_PATH) and os.path.exists(DIABETES_COLS_PATH):
+            self.diabetes_model = joblib.load(DIABETES_MODEL_PATH)
+            self.diabetes_cols = list(joblib.load(DIABETES_COLS_PATH))
+        self._diabetes_explainer = None
         self.latest_inputs = None
         self.latest_profile = None
 
@@ -123,11 +144,16 @@ class HealthTwin:
         # --- Cardio model prediction ---
         cardio_prob, cardio_shap = self._predict_cardio(inputs, bmi_val)
         cardio_label = self._risk_label(cardio_prob)
+        conditions = list(inputs.get("conditions", []))
+        diabetes_risk, diabetes_shap = self._predict_diabetes(inputs, bmi_val, bp, conditions)
 
         # --- Overall health score (0-100, higher = healthier) ---
         overall = self._compute_overall_score(
             bmi_val, bp, cardio_prob, diab_indicator, framingham,
         )
+        # Diagnosed conditions are not model features; apply a documented, capped penalty instead.
+        penalty = min(35, sum(CONDITION_PENALTIES.get(c, 10) for c in conditions))
+        overall = max(0, overall - penalty)
 
         profile = {
             "bmi": bmi_val,
@@ -138,9 +164,13 @@ class HealthTwin:
                 "label": cardio_label,
             },
             "diabetes_indicator": diab_indicator,
+            "diabetes_risk": diabetes_risk,
+            "diabetes_shap": diabetes_shap,
             "framingham_10yr_risk": round(framingham, 1),
             "overall_health_score": overall,
             "shap_top_features": cardio_shap,
+            "conditions": conditions,
+            "condition_penalty": penalty,
         }
         self.latest_inputs = dict(inputs)
         self.latest_profile = profile
@@ -203,6 +233,66 @@ class HealthTwin:
                     "feature": feat, "impact": round(float(val), 4), "model": "cardio",
                 })
         return prob, shap_features
+
+    # ------------------------------------------------------------------
+    #  DIABETES MODEL HELPERS
+    # ------------------------------------------------------------------
+    def _predict_diabetes(
+        self, inputs: dict, bmi_val: float, bp: str, conditions: list[str],
+    ) -> tuple[dict | None, list[dict]]:
+        """Diabetes probability from the trained model, with grouped SHAP factors.
+
+        HbA1c is rarely known, so when it is missing it is estimated from fasting glucose with the
+        ADA eAG relation (A1c = (glucose + 46.7) / 28.7) and flagged as estimated.
+        """
+        if self.diabetes_model is None:
+            return None, []
+        glucose = float(inputs.get("blood_glucose_level") or 90)
+        hba1c = inputs.get("hba1c")
+        estimated = hba1c is None
+        if estimated:
+            hba1c = round((glucose + 46.7) / 28.7, 1)
+        gender = str(inputs.get("gender", "")).lower()
+        values = {
+            "age": inputs["age"],
+            "hypertension": int(bp in ("Stage 1", "Stage 2") or "hypertension" in conditions),
+            "heart_disease": int(bool(HEART_CONDITIONS & set(conditions))),
+            "bmi": bmi_val,
+            "HbA1c_level": float(hba1c),
+            "blood_glucose_level": glucose,
+            "gender_Female": int(gender == "female"),
+            "gender_Male": int(gender == "male"),
+            "gender_Other": int(gender not in ("female", "male")),
+            "smoking_current": int(bool(inputs.get("smoke"))),
+            "smoking_never": int(not inputs.get("smoke")),
+        }
+        row = pd.DataFrame([{col: values.get(col, 0) for col in self.diabetes_cols}])
+        prob = float(self.diabetes_model.predict_proba(row)[0, 1])
+        risk = {
+            "probability": round(prob, 3),
+            "label": self._risk_label(prob),
+            "hba1c": float(hba1c),
+            "hba1c_estimated": estimated,
+            "diagnosed": "diabetes" in conditions,
+        }
+
+        shap_features: list[dict] = []
+        if SHAP_AVAILABLE:
+            if self._diabetes_explainer is None:
+                self._diabetes_explainer = shap.TreeExplainer(self.diabetes_model)
+            sv = self._diabetes_explainer.shap_values(row)
+            if isinstance(sv, list):
+                vals = sv[1][0]
+            else:
+                vals = sv[0] if sv.ndim == 1 else sv[0, :, 1] if sv.ndim == 3 else sv[0]
+            # One-hot columns are summed back into the single factor the user recognises.
+            grouped: dict[str, float] = {}
+            for col, val in zip(self.diabetes_cols, vals):
+                key = "gender" if col.startswith("gender_") else "smoking" if col.startswith("smoking_") else col
+                grouped[key] = grouped.get(key, 0.0) + float(val)
+            for feat, val in sorted(grouped.items(), key=lambda x: abs(x[1]), reverse=True)[:5]:
+                shap_features.append({"feature": feat, "impact": round(val, 4), "model": "diabetes"})
+        return risk, shap_features
 
     # ------------------------------------------------------------------
     #  SCORING HELPERS

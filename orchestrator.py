@@ -31,6 +31,8 @@ from insurance_twin import InsuranceTwin
 from rag_agent import RAGAgent
 from narration_agent import generate_explanation, generate_ranked_whatifs
 from combined_simulator import CombinedSimulator
+from scenario_engine import analyze_question
+from event_engine import HYPOTHETICAL
 
 load_dotenv()
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -38,29 +40,73 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 # ---------------------------------------------------------------------------
 #  KEYWORD ROUTING TABLES (Step 1: deterministic, no API call)
+#  Regex fragments matched on word boundaries ("premium" must not match "emi").
 # ---------------------------------------------------------------------------
 HEALTH_KEYWORDS = [
-    "diabetes", "weight", "blood pressure", "bmi", "obesity", "cholesterol",
-    "cardio", "heart", "glucose", "hba1c", "hypertension", "smoking",
-    "fitness", "health", "risk", "bp",
+    r"diabet\w*", "weight", "overweight", "blood", "bp", "bmi", r"obes\w*", "cholesterol", r"cardio\w*", "cvd",
+    "heart", "glucose", "sugar", "hba1c", r"hypertensi\w*", r"smok\w*", r"cigarettes?", "fitness", "health",
+    "stroke", "cancer", "angioplasty", r"pregnan\w*", r"alcohol\w*", r"drink\w*", "beer",
+    "weak", r"weakness", r"fatigue\w*", "tired", r"exhaust\w*", "drained", "lethargic", r"dizz\w*", r"faint\w*",
+    "fever", r"cough\w*", "cold", "flu", r"nause\w*", r"vomit\w*", "unwell",
+    r"symptoms?", "pain", r"\w*aches?", "hurts?", r"breath\w*", "sleep", r"stress\w*", r"anxi\w*", r"depress\w*",
+    "energy", "sick", "not feeling well", r"knees?", "medical", r"medicin\w*", r"doctors?", "cardiologist",
+    "dengue", "malaria", "typhoid", "covid", "corona", "jaundice", "pneumonia", r"fractur\w*", r"injur\w*",
+    r"sprain\w*", "migraine", r"allerg\w*", "asthma", r"infection\w*", "viral", "flu", r"illness\w*",
+    r"check-?ups?", r"recover\w*", "family history", "diet", "eat", "junk food", r"calories?", "protein",
+    r"vitamins?", r"supplements?", "water", "fasting", r"exercis\w*", "gym", "yoga", r"walk\w*", r"run\w*",
+    r"cycl\w*", r"swim\w*", r"jog\w*", r"(?:[89]\d|1\d\d|2[0-4]\d)\s*/\s*(?:[4-9]\d|1[0-4]\d)(?!\s*/)",
+    "steps", r"workouts?", "belly fat", "kg", "sit all day",
 ]
 FINANCE_KEYWORDS = [
-    "save", "saving", "afford", "loan", "emi", "debt", "income", "expense",
-    "budget", "investment", "financial", "money", "salary", "dti",
-    "emergency fund", "disposable",
+    r"sav(?:e|es|ed|ing|ings)", r"afford\w*", r"loans?", "emis?", "debt", "income", r"expenses?", "budget",
+    r"invest\w*", r"financ\w*", "money", r"salary", "dti", "emergency fund", "disposable", r"\w*spend\w*",
+    "rent", "job", "laid off", "fired", "hike", r"raises?", "increment", r"promot\w*", "bonus", r"inherit\w*", r"earn\w*",
+    "bank", "fd", "fixed deposit", "sip", r"retire\w*", "tax", "cash", "credit card", "bills?", "fees",
+    r"outflows?", "stability", "50/30/20", "lend", r"interest",
+]
+# Generic money words: they mean "finance" unless the question is about insurance (premium cost, cover amount).
+FINANCE_WEAK_KEYWORDS = [
+    "buy", r"bought", r"purchas\w*", r"costs?", r"costing", "price", "worth", "spent", "paid", "pay",
+    "lakh", "crore", r"\d+k", r"trips?", r"vacations?", r"holidays?", "travel", "phone", "iphone", "laptop", "car",
+    "bike", "scooter", "house", "flat", "gold",
+    r"wedding", r"renovat\w*", r"per month", r"a month",
 ]
 INSURANCE_KEYWORDS = [
-    "coverage", "premium", "claim", "rider", "insured", "policy",
-    "insurance", "sum insured", "deductible", "cashless",
+    r"cover\w*", "premium", r"claims?", r"riders?", r"insur\w*", r"polic(?:y|ies)", "deductible", "cashless",
+    "co-?pay", "floater", "super top-?up", "waiting period", "lapsed", "opd", "room rent", "sub-?limit",
+    "restore benefit", "free look", "exclusions?", r"renew\w*", r"ported", "maternity", "ambulance",
 ]
 CROSS_DOMAIN_KEYWORDS = [
-    "treatment", "medication", "surgery", "procedure", "hospital",
-    "operation",
+    "treatment", "medication", "surgery", "procedure", r"hospital\w*", "operation", "medical",
 ]
 COST_KEYWORDS = [
-    "cost", "price", "expensive", "afford", "pay", "rs", "rupee", "lakh",
-    "crore", "inr", "₹",
+    r"costs?", r"costing", "price", "expensive", r"afford\w*", "pay", "paid", r"bills?", "rs", r"rupees?",
+    "lakh", "crore", "inr",
 ]
+# Phrases whose words would otherwise pull in the wrong twin.
+ROUTING_PHRASES = [
+    (r"health (?:insurance|cover|policy|plan)|mediclaim|hospital cash|personal accident|critical illness"
+     r"|life cover|term (?:plan|insurance)|no claim bonus|room rent|super top[- ]?up", " insurance "),
+    (r"financial health|money health", " finances "),
+    (r"\b(emis?|loans?) (?:are |is )?running\b", r" \1 active "),
+]
+
+
+def _kw_regex(words: list[str]) -> re.Pattern:
+    return re.compile(r"(?<![\w-])(?:" + "|".join(words) + r")(?![\w-])", re.IGNORECASE)
+
+
+_HEALTH_RE, _FINANCE_RE, _FINANCE_WEAK_RE, _INSURANCE_RE, _CROSS_RE, _COST_RE = map(_kw_regex, (
+    HEALTH_KEYWORDS, FINANCE_KEYWORDS, FINANCE_WEAK_KEYWORDS, INSURANCE_KEYWORDS, CROSS_DOMAIN_KEYWORDS,
+    COST_KEYWORDS,
+))
+
+
+def _normalize_for_routing(query: str) -> str:
+    q = query.lower()
+    for pattern, replacement in ROUTING_PHRASES:
+        q = re.sub(pattern, replacement, q)
+    return q
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +161,8 @@ class Orchestrator:
         self.health_profile = None
         self.finance_profile = None
         self.insurance_profile = None
+        # Optional callable(inputs) -> health profile, used to re-run the model for health what-ifs.
+        self.health_assess = None
 
         # Build LangGraph
         self.graph = self._build_graph()
@@ -135,14 +183,16 @@ class Orchestrator:
             {"twins": [...], "mode": "single-domain"|"cross-domain",
              "simulate": bool}
         """
-        q_lower = query.lower()
+        q_lower = _normalize_for_routing(query)
 
         # --- Step 1: Keyword matching ---
-        health_match = any(kw in q_lower for kw in HEALTH_KEYWORDS)
-        finance_match = any(kw in q_lower for kw in FINANCE_KEYWORDS)
-        insurance_match = any(kw in q_lower for kw in INSURANCE_KEYWORDS)
-        cross_match = any(kw in q_lower for kw in CROSS_DOMAIN_KEYWORDS)
-        cost_match = any(kw in q_lower for kw in COST_KEYWORDS)
+        cross_match = bool(_CROSS_RE.search(q_lower))
+        health_match = bool(_HEALTH_RE.search(q_lower)) or cross_match
+        insurance_match = bool(_INSURANCE_RE.search(q_lower))
+        finance_match = bool(_FINANCE_RE.search(q_lower)) or (
+            not insurance_match and bool(_FINANCE_WEAK_RE.search(q_lower) or "₹" in q_lower)
+        )
+        cost_match = bool(_COST_RE.search(q_lower)) or "₹" in q_lower
 
         # Cross-domain: treatment/medication + cost word → all three + simulate
         if cross_match and cost_match:
@@ -277,7 +327,7 @@ class Orchestrator:
 
     def _rag_node(self, state: dict) -> dict:
         """Retrieve relevant guideline chunks via RAG."""
-        query = state.get("query", "")
+        query = state.get("context_query") or state.get("query", "")
         chunks = self._get_rag_agent().retrieve(query, top_k=3)
         state["rag_chunks"] = chunks
         return state
@@ -290,15 +340,21 @@ class Orchestrator:
             return state
 
         try:
-            # Extract cost from query (simple regex for Rs./₹ amounts)
+            # Extract cost from query (simple regex for Rs./₹ amounts), falling back to earlier turns.
             query = state.get("query", "")
+            context = state.get("context_query") or query
             cost = self._extract_cost(query)
+            if cost is None:
+                for turn in reversed(state.get("history") or []):
+                    cost = self._extract_cost(turn.get("query", ""))
+                    if cost is not None:
+                        break
             if cost is None:
                 state["simulation_result"] = {
                     "error": "Please include a specific treatment cost to run this simulation."
                 }
                 return state
-            condition = self._extract_condition(query)
+            condition = self._extract_condition(context)
             self._get_finance_profile()
             if self.insurance_twin is None:
                 self.insurance_twin = InsuranceTwin()
@@ -328,6 +384,15 @@ class Orchestrator:
         if state.get("simulation_result"):
             twin_outputs["simulation"] = state["simulation_result"]
 
+        scenarios = self._compute_scenarios(state)
+        state["scenarios"] = scenarios
+        if scenarios:
+            twin_outputs["scenarios"] = scenarios
+        if state.get("life_context"):
+            twin_outputs["life_context"] = state["life_context"]
+        if state.get("domain"):
+            twin_outputs["domain_focus"] = state["domain"]
+
         shap_features = []
         hp = state.get("health_profile", {})
         if hp:
@@ -340,6 +405,8 @@ class Orchestrator:
                 twin_outputs=twin_outputs,
                 shap_features=shap_features,
                 rag_chunks=rag_chunks,
+                question=state.get("query"),
+                history=state.get("history"),
             )
             state["narration"] = narration
         except Exception as e:
@@ -432,21 +499,78 @@ class Orchestrator:
 
         return builder.compile()
 
+    def _compute_scenarios(self, state: dict) -> list[dict]:
+        """Exact before/after numbers for concrete changes in the question (or, for follow-ups, the thread)."""
+        # A message that reported real events (recorded, or waiting on a missing detail) is not a what-if:
+        # computing one would double-count it or invent numbers from earlier turns.
+        life = state.get("life_context") or {}
+        if life.get("just_recorded") or life.get("just_reverted") or life.get("pending_questions"):
+            return []
+        query = state.get("query", "")
+        if not self._asks_or_plans(query):
+            return []  # A plain statement ("I walk 10000 steps") is context, not a what-if.
+        try:
+            context = state.get("context_query") or query
+            # Follow-ups: intent from the thread context, amounts from the latest message.
+            attempts = [(context, query), (query, None)] if context != query else [(query, None)]
+            for text, focus in attempts:
+                scenarios = analyze_question(
+                    text,
+                    self.health_inputs,
+                    self.finance_inputs,
+                    self.insurance_inputs,
+                    health_profile=state.get("health_profile") or self.health_profile,
+                    health_assess=self.health_assess,
+                    focus=focus,
+                )
+                if scenarios:
+                    return scenarios
+        except Exception:  # A parsing/calculation problem must not break the answer.
+            return []
+        return []
+
     def _route_node(self, state: dict) -> dict:
         """Initial routing node."""
         query = state.get("query", "")
-        routing = self.route_query(query)
-        state["routing"] = routing
+        history = state.get("history") or []
+        # Follow-ups without domain words ("what about the cost?") inherit the previous topic.
+        if history and not self._has_domain_keyword(query):
+            context = f"{history[-1].get('query', '')} {query}".strip()
+        else:
+            context = query
+        state["context_query"] = context
+        if state.get("domain"):
+            # Twin pages each have their own chat that only answers for that twin.
+            state["routing"] = {"twins": [state["domain"]], "mode": "single-domain", "simulate": False}
+        else:
+            state["routing"] = self.route_query(context)
         return state
+
+    @staticmethod
+    def _asks_or_plans(query: str) -> bool:
+        q = query.strip().lower()
+        return q.endswith("?") or bool(HYPOTHETICAL.search(q)) or bool(re.match(
+            r"(how|what|which|why|when|is|are|am|do|does|can|could|should|will|would|and|tell|show|compare|calculate)\b", q,
+        ))
+
+    @staticmethod
+    def _has_domain_keyword(query: str) -> bool:
+        # Generic money words ("10k", "per month") don't start a new topic; they refine the previous one.
+        q = _normalize_for_routing(query)
+        return any(r.search(q) for r in (_HEALTH_RE, _FINANCE_RE, _INSURANCE_RE, _CROSS_RE))
 
     # ------------------------------------------------------------------
     #  PUBLIC API
     # ------------------------------------------------------------------
-    def process_query(self, query: str) -> dict:
+    def process_query(
+        self, query: str, history: list[dict] | None = None, life_context: dict | None = None, domain: str | None = None,
+    ) -> dict:
         """Process a user query through the full orchestrator pipeline.
 
         Args:
             query: Natural language query from the user.
+            history: Earlier turns of this conversation, oldest first:
+                [{"query": str, "answer": str}, ...].
 
         Returns:
             Final state dict containing routing, profiles, RAG chunks,
@@ -454,6 +578,11 @@ class Orchestrator:
         """
         initial_state = {
             "query": query,
+            "history": list(history or []),
+            "life_context": life_context or {},
+            "domain": domain,
+            "context_query": query,
+            "scenarios": [],
             "routing": {},
             "health_profile": None,
             "finance_profile": None,

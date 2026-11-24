@@ -1,15 +1,28 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowLeft, ArrowRight, HeartPulse, ShieldCheck, Sparkles, UserRound, Wallet } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BuildSequence, type LogLine } from "../components/onboarding/BuildSequence";
 import { TwinReadout } from "../components/onboarding/TwinReadout";
 import { NumberField, Segmented } from "../components/ui/Fields";
 import { Stepper } from "../components/ui/Stepper";
-import { ApiError, assess, onboard } from "../lib/api";
+import { ApiError, assess, getInputs, onboard } from "../lib/api";
 import { DEFAULT_PAYLOAD, PERSONAS } from "../lib/personas";
 import type { FinanceInputs, HealthInputs, InsuranceInputs, OnboardPayload, Snapshot } from "../lib/types";
-import { setCurrentUser } from "../lib/user";
+import { setCurrentUser, useCurrentUser } from "../lib/user";
+
+/** The twin's latest saved inputs (including advisor updates), or null if the user has none yet. */
+async function loadSaved(userId: string): Promise<OnboardPayload | null> {
+  try {
+    const saved = await getInputs(userId);
+    // annual_income is derived from income on the server; leaving it out keeps it in sync.
+    const { annual_income: _derived, ...insurance } = saved.insurance_inputs;
+    return { ...saved, user_id: userId, insurance_inputs: insurance };
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
+}
 
 const STEPS = [
   { label: "Profile", icon: UserRound },
@@ -83,6 +96,21 @@ export function Onboarding() {
   const [result, setResult] = useState<Snapshot | null>(null);
   const [buildError, setBuildError] = useState<string | null>(null);
   const logId = useRef(0);
+  const currentUser = useCurrentUser();
+  const [loadedFrom, setLoadedFrom] = useState<string | null>(null);
+
+  const loadIntoForm = async (userId: string, fallback: OnboardPayload) => {
+    const saved = await loadSaved(userId).catch(() => null);
+    setPayload(saved ?? structuredClone(fallback));
+    setLoadedFrom(saved ? userId : null);
+    setErrors({});
+  };
+
+  useEffect(() => {
+    if (currentUser) void loadIntoForm(currentUser, { ...DEFAULT_PAYLOAD, user_id: currentUser });
+    // Only on first visit; later edits in the form must not be overwritten.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const setHealth = <K extends keyof HealthInputs>(key: K, value: HealthInputs[K]) =>
     setPayload((p) => ({ ...p, health_inputs: { ...p.health_inputs, [key]: value } }));
@@ -191,10 +219,7 @@ export function Onboarding() {
               type="button"
               whileHover={{ y: -2 }}
               whileTap={{ scale: 0.97 }}
-              onClick={() => {
-                setPayload(structuredClone(persona.payload));
-                setErrors({});
-              }}
+              onClick={() => void loadIntoForm(persona.payload.user_id, persona.payload)}
               className={`rounded-xl border px-3 py-2 text-left transition-colors ${
                 payload.user_id === persona.payload.user_id
                   ? "border-gold/60 bg-gold/10"
@@ -205,6 +230,11 @@ export function Onboarding() {
               <span className="block text-[11px] text-taupe">{persona.tagline}</span>
             </motion.button>
           ))}
+          {loadedFrom && (
+            <span className="w-full text-[11px] text-taupe">
+              Showing <span className="text-champagne">{loadedFrom}</span>'s latest twin, including updates made in the AI Advisor.
+            </span>
+          )}
         </div>
 
         <div className="glass p-6 md:p-8">

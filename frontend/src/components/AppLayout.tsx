@@ -54,14 +54,14 @@ export function AppLayout() {
           <div className="md:hidden">
             <Logo compact />
           </div>
-          <h1 className="font-display text-xl font-semibold text-ivory md:text-2xl">
+          <h1 className="min-w-0 flex-1 truncate font-display text-xl font-semibold text-ivory md:text-2xl">
             {current?.label ?? "TwinLife AI"}
           </h1>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <button
               type="button"
               onClick={openCommandPalette}
-              className="glass hidden items-center gap-2 rounded-full px-3 py-1.5 text-xs whitespace-nowrap text-taupe hover:text-champagne sm:flex"
+              className="glass hidden items-center gap-2 rounded-full px-3 py-1.5 text-xs whitespace-nowrap text-taupe hover:text-champagne lg:flex"
               aria-label="Open command palette"
             >
               <Search className="h-3.5 w-3.5" /> Search

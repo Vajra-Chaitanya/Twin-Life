@@ -36,8 +36,9 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # ─────────────────────────────────────────────────────────────
 #  CONFIG
 # ─────────────────────────────────────────────────────────────
-DATA_PATH = os.path.join("data", "diabetes_prediction_dataset.csv")
-MODEL_DIR = "models"
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_PATH = os.path.join(PROJECT_ROOT, "data", "diabetes_prediction_dataset.csv")
+MODEL_DIR = os.path.join(PROJECT_ROOT, "models")
 MODEL_PATH = os.path.join(MODEL_DIR, "diabetes_model.pkl")
 
 TARGET = "diabetes"

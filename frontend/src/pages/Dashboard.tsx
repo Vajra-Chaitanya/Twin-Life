@@ -12,13 +12,12 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { FinancePanelBody } from "../components/dashboard/FinancePanel";
+import { CardioRiskPanel, DiabetesRiskPanel, RiskExplainPanel } from "../components/dashboard/HealthRiskPanels";
 import { InsurancePanelBody } from "../components/dashboard/InsurancePanel";
 import { Panel } from "../components/dashboard/Panel";
-import { RiskGauge } from "../components/dashboard/RiskGauge";
-import { ShapChart } from "../components/dashboard/ShapChart";
 import { ScoreRing } from "../components/ui/ScoreRing";
 import { formatRelative } from "../lib/format";
-import { bmiTone, bpTone, levelTone, type Tone } from "../lib/formulas";
+import { type Tone } from "../lib/formulas";
 import { deriveSignals } from "../lib/insights";
 import { useLatestSnapshot, useReassess } from "../lib/queries";
 import type { Snapshot } from "../lib/types";
@@ -58,19 +57,9 @@ function Skeleton() {
   );
 }
 
-function Vital({ label, value, tone }: { label: string; value: string; tone: Tone }) {
-  return (
-    <div className={`rounded-xl border bg-ink/40 px-3 py-2.5 ${TONE_BORDER[tone]}`}>
-      <p className="text-[10px] tracking-widest text-taupe uppercase">{label}</p>
-      <p className={`mt-0.5 font-mono text-sm ${TONE_TEXT[tone]}`}>{value}</p>
-    </div>
-  );
-}
-
 function DashboardContent({ snapshot, onReassess, reassessing }: { snapshot: Snapshot; onReassess: () => void; reassessing: boolean }) {
   const { health: h, finance: f, insurance: i } = snapshot;
   const signals = deriveSignals(snapshot);
-  const framinghamTone: Tone = h.framingham_10yr_risk < 10 ? "good" : h.framingham_10yr_risk < 20 ? "warn" : "risk";
 
   return (
     <motion.div variants={grid} initial="hidden" animate="show" className="grid gap-5 lg:grid-cols-3">
@@ -98,28 +87,9 @@ function DashboardContent({ snapshot, onReassess, reassessing }: { snapshot: Sna
         </div>
       </Panel>
 
-      <Panel title="Cardiovascular risk" icon={HeartPulse} accent="text-health" subtitle="Random Forest probability">
-        <RiskGauge probability={h.cardio_risk.probability} label={h.cardio_risk.label} />
-        <div className="mt-5 grid grid-cols-2 gap-2">
-          <Vital label="BMI" value={`${h.bmi}`} tone={bmiTone(h.bmi)} />
-          <Vital label="Blood pressure" value={h.hypertension_stage} tone={bpTone(h.hypertension_stage)} />
-          <Vital label="Glucose" value={h.diabetes_indicator} tone={levelTone(h.diabetes_indicator)} />
-          <Vital label="Framingham 10y" value={`${h.framingham_10yr_risk}%`} tone={framinghamTone} />
-        </div>
-      </Panel>
-
-      <Panel
-        title="Why this risk?"
-        icon={BrainCircuit}
-        accent="text-health"
-        subtitle="SHAP attribution: each factor's push on the model's prediction"
-        className="lg:col-span-2"
-      >
-        <ShapChart features={h.shap_top_features} />
-        <p className="mt-5 text-[11px] text-taupe/70">
-          Values are percentage-point contributions to the predicted probability relative to the model's average.
-        </p>
-      </Panel>
+      <CardioRiskPanel h={h} />
+      <DiabetesRiskPanel h={h} />
+      <RiskExplainPanel h={h} />
 
       <Panel title="Financial twin" icon={Wallet} accent="text-finance" className="lg:col-span-2">
         <FinancePanelBody finance={f} />

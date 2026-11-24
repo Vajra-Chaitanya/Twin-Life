@@ -19,15 +19,18 @@ export function GoldDust({ density = 0.00008 }: { density?: number }) {
     let width = 0;
     let height = 0;
 
-    const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      width = window.innerWidth;
-      height = window.innerHeight;
-      canvas.width = width * dpr;
-      canvas.height = height * dpr;
-      canvas.style.width = `${width}px`;
-      canvas.style.height = `${height}px`;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // One pre-rendered glow sprite replaces per-particle shadowBlur, which is the costliest 2D canvas op.
+    const sprite = document.createElement("canvas");
+    sprite.width = sprite.height = 32;
+    const sctx = sprite.getContext("2d")!;
+    const glow = sctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+    glow.addColorStop(0, "rgba(245, 230, 184, 1)");
+    glow.addColorStop(0.25, "rgba(232, 200, 114, 0.9)");
+    glow.addColorStop(1, "rgba(212, 175, 55, 0)");
+    sctx.fillStyle = glow;
+    sctx.fillRect(0, 0, 32, 32);
+
+    const seed = () => {
       const count = Math.round(width * height * density);
       particles = Array.from({ length: count }, () => ({
         x: Math.random() * width,
@@ -38,6 +41,21 @@ export function GoldDust({ density = 0.00008 }: { density?: number }) {
         phase: Math.random() * Math.PI * 2,
         speed: Math.random() * 0.02 + 0.005,
       }));
+    };
+
+    const resize = () => {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const widthChanged = window.innerWidth !== width;
+      width = window.innerWidth;
+      height = window.innerHeight;
+      canvas.width = width * dpr;
+      canvas.height = height * dpr;
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      // Mobile URL bars change only the height while scrolling; keep particles so nothing jumps.
+      if (widthChanged || particles.length === 0) seed();
+      if (reduceMotion) draw();
     };
 
     const draw = () => {
@@ -52,14 +70,11 @@ export function GoldDust({ density = 0.00008 }: { density?: number }) {
             p.x = Math.random() * width;
           }
         }
-        const alpha = 0.25 + 0.45 * (0.5 + 0.5 * Math.sin(p.phase));
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(232, 200, 114, ${alpha})`;
-        ctx.shadowColor = "rgba(212, 175, 55, 0.8)";
-        ctx.shadowBlur = p.r * 4;
-        ctx.fill();
+        ctx.globalAlpha = 0.25 + 0.45 * (0.5 + 0.5 * Math.sin(p.phase));
+        const size = p.r * 8;
+        ctx.drawImage(sprite, p.x - size / 2, p.y - size / 2, size, size);
       }
+      ctx.globalAlpha = 1;
       if (!reduceMotion) frame = requestAnimationFrame(draw);
     };
 

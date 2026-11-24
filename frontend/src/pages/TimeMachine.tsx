@@ -4,6 +4,7 @@ import { AlertTriangle, ChevronLeft, ChevronRight, Clock, History as HistoryIcon
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { DeltaTable } from "../components/history/DeltaTable";
+import { LifeEventsPanel } from "../components/history/LifeEventsPanel";
 import { TrendChart } from "../components/history/TrendChart";
 import { Panel } from "../components/dashboard/Panel";
 import { ScoreRing } from "../components/ui/ScoreRing";
@@ -11,6 +12,7 @@ import { ApiError, assess, getHistory, onboard } from "../lib/api";
 import { formatRelative } from "../lib/format";
 import { buildJourney } from "../lib/journey";
 import { PERSONAS } from "../lib/personas";
+import { useLifeEvents } from "../lib/queries";
 import { useCurrentUser } from "../lib/user";
 
 const NOTES_KEY = "twinlife-snapshot-notes";
@@ -41,6 +43,16 @@ export function TimeMachine() {
   const [journey, setJourney] = useState<{ done: number; total: number } | null>(null);
   const [journeyError, setJourneyError] = useState<string | null>(null);
   const [notes, setNotes] = useState(readNotes);
+  const lifeEvents = useLifeEvents(userId);
+  const eventNotes = useMemo(() => {
+    const byId: Record<string, string> = {};
+    for (const e of lifeEvents.data?.events ?? []) {
+      if (e.undone || e.snapshot_id === null) continue;
+      const label = `${e.domains.map((d) => d[0].toUpperCase() + d.slice(1)).join("+")}: ${e.summary}`;
+      byId[e.snapshot_id] = byId[e.snapshot_id] ? `${byId[e.snapshot_id]}; ${label}` : label;
+    }
+    return byId;
+  }, [lifeEvents.data]);
 
   useEffect(() => setSelected(Math.max(0, snapshots.length - 1)), [snapshots.length]);
 
@@ -192,7 +204,9 @@ export function TimeMachine() {
           <AnimatePresence mode="wait">
             <motion.span key={current.snapshot_id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
               Snapshot #{current.snapshot_id} · {formatRelative(current.created_at)}
-              {notes[current.snapshot_id] && <span className="text-champagne"> · {notes[current.snapshot_id]}</span>}
+              {(notes[current.snapshot_id] ?? eventNotes[current.snapshot_id]) && (
+                <span className="text-champagne"> · {notes[current.snapshot_id] ?? eventNotes[current.snapshot_id]}</span>
+              )}
             </motion.span>
           </AnimatePresence>
         }
@@ -229,6 +243,8 @@ export function TimeMachine() {
       >
         <DeltaTable from={baseline} to={current} />
       </Panel>
+
+      <LifeEventsPanel userId={userId} />
     </motion.div>
   );
 }

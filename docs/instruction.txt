@@ -88,7 +88,7 @@ Step 2.2: Configure your .env file:
   Fund, Stability Score, Affordability Score), and Insurance (Coverage Ratio,
   Premium Affordability, Insurance Score).
 
-* Module 2: `train_cardio_model.py`
+* Module 2: `training/train_cardio_model.py`
   One trained Machine Learning model using RandomForestClassifier:
   - Cardio Model: Cleans `data/cardio_train.csv` (70k rows), converts age from
     days to years, filters valid blood pressure ranges (ap_hi > ap_lo).
@@ -103,7 +103,7 @@ Step 2.2: Configure your .env file:
     disposable income.
   - InsuranceTwin: Rule-based future medical cost estimation and rider gap analysis.
 
-* Module 4: `combined_simulator.py` & `test_combined_simulator.py`
+* Module 4: `combined_simulator.py` & `scripts/manual/test_combined_simulator.py`
   Autonomous treatment-plan advisor agent powered by Google Gemini API.
   - Registers 4 deterministic Python tools (check_affordability,
     check_insurance_coverage, get_cheaper_alternative, get_health_context).
@@ -162,7 +162,7 @@ Step 4.2: Train the Health Machine Learning Model (Module 2)
   Train the cardiovascular Random Forest classifier and verify benchmark metrics:
 
     # Train Cardiovascular Disease Model
-    python train_cardio_model.py
+    python training/train_cardio_model.py
     
     Expected output:
       Accuracy : ~73.6%
@@ -187,7 +187,7 @@ Step 4.3: Execute Standalone Digital Twin Assessments (Module 3)
 Step 4.4: Run the Autonomous Agent Combined Simulator (Module 4)
     Evaluate treatment plans across 5 varied patient scenarios:
 
-    python test_combined_simulator.py
+    python scripts/manual/test_combined_simulator.py
 
     What happens during execution:
     1. Loads health, finance, and insurance profiles for each test scenario.

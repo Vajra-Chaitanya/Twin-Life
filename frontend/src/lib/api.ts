@@ -1,4 +1,17 @@
-import type { ChatMessage, Notification, OnboardPayload, SimulateRequest, SimulateResponse, Snapshot, WhatIfResponse } from "./types";
+import type {
+  ChatMessage,
+  ChatThread,
+  Commitment,
+  Due,
+  LifeEvent,
+  Notification,
+  OnboardPayload,
+  SimulateRequest,
+  SimulateResponse,
+  Snapshot,
+  Twin,
+  WhatIfResponse,
+} from "./types";
 
 export type HealthStatus = { status: string };
 
@@ -42,11 +55,31 @@ export const getHistory = (userId: string, limit = 20) =>
     `/history?${new URLSearchParams({ user_id: userId, limit: String(limit) })}`,
   );
 
-export const askAdvisor = (userId: string, query: string) =>
-  apiFetch<ChatMessage>("/query", { method: "POST", body: JSON.stringify({ user_id: userId, query }) });
+export const askAdvisor = (userId: string, query: string, threadId: string, domain?: Twin) =>
+  apiFetch<ChatMessage>("/query", {
+    method: "POST",
+    body: JSON.stringify({ user_id: userId, query, thread_id: threadId, ...(domain ? { domain } : {}) }),
+  });
 
-export const getChatHistory = (userId: string) =>
-  apiFetch<{ user_id: string; messages: ChatMessage[] }>(`/chat-history?${new URLSearchParams({ user_id: userId })}`);
+export const getChatHistory = (userId: string, threadId: string, domain?: Twin) =>
+  apiFetch<{ user_id: string; threads: ChatThread[]; messages: ChatMessage[] }>(
+    `/chat-history?${new URLSearchParams({ user_id: userId, thread_id: threadId, ...(domain ? { domain } : {}) })}`,
+  );
+
+export const renameThread = (userId: string, threadId: string, title: string) =>
+  apiFetch<{ thread_id: string; title: string }>(`/chat-threads/${encodeURIComponent(threadId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ user_id: userId, title }),
+  });
+
+export const deleteThread = (userId: string, threadId: string) =>
+  apiFetch<{ thread_id: string; deleted_messages: number }>(
+    `/chat-threads/${encodeURIComponent(threadId)}?${new URLSearchParams({ user_id: userId })}`,
+    { method: "DELETE" },
+  );
+
+export const getDues = (userId: string) =>
+  apiFetch<{ user_id: string; dues: Due[]; attention: number }>(`/dues?${new URLSearchParams({ user_id: userId })}`);
 
 export const getNotifications = (userId: string) =>
   apiFetch<{ user_id: string; unread: number; notifications: Notification[] }>(
@@ -61,6 +94,11 @@ export const markNotificationsRead = (userId: string, ids?: number[]) =>
 
 export const getInputs = (userId: string) =>
   apiFetch<OnboardPayload>(`/inputs?${new URLSearchParams({ user_id: userId })}`);
+
+export const getLifeEvents = (userId: string) =>
+  apiFetch<{ user_id: string; events: LifeEvent[]; counts: Record<Twin, number>; commitments: Commitment[] }>(
+    `/events?${new URLSearchParams({ user_id: userId })}`,
+  );
 
 export const simulate = (request: SimulateRequest) =>
   apiFetch<SimulateResponse>("/simulate", { method: "POST", body: JSON.stringify(request) });

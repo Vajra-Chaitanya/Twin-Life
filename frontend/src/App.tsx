@@ -17,6 +17,9 @@ const TimeMachine = named(() => import("./pages/TimeMachine"), "TimeMachine");
 const WhatIfLab = named(() => import("./pages/WhatIfLab"), "WhatIfLab");
 const Advisor = named(() => import("./pages/Advisor"), "Advisor");
 const Alerts = named(() => import("./pages/Alerts"), "Alerts");
+const HealthTwin = named(() => import("./pages/HealthTwin"), "HealthTwin");
+const FinanceTwin = named(() => import("./pages/FinanceTwin"), "FinanceTwin");
+const InsuranceTwin = named(() => import("./pages/InsuranceTwin"), "InsuranceTwin");
 
 function PageFallback() {
   return (
@@ -37,6 +40,9 @@ export default function App() {
         <Route element={<AppLayout />}>
           <Route path="/onboard" element={page(<Onboarding />)} />
           <Route path="/dashboard" element={page(<Dashboard />)} />
+          <Route path="/twin/health" element={page(<HealthTwin />)} />
+          <Route path="/twin/finance" element={page(<FinanceTwin />)} />
+          <Route path="/twin/insurance" element={page(<InsuranceTwin />)} />
           <Route path="/history" element={page(<TimeMachine />)} />
           <Route path="/simulate" element={page(<WhatIfLab />)} />
           <Route path="/chat" element={page(<Advisor />)} />

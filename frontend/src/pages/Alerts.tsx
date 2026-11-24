@@ -14,6 +14,11 @@ const TYPE_META: Record<string, { label: string; icon: typeof Bell; accent: stri
   low_savings_rate: { label: "Low savings rate", icon: Wallet, accent: "text-finance" },
   insurance_score_drop: { label: "Insurance score drop", icon: ShieldCheck, accent: "text-insurance" },
   new_rider_gap: { label: "New rider gap", icon: ShieldCheck, accent: "text-insurance" },
+  due_overdue: { label: "Payment overdue", icon: AlertTriangle, accent: "text-risk" },
+  due_outstanding: { label: "Outstanding dues", icon: Wallet, accent: "text-warn" },
+  due_due_soon: { label: "Payment due soon", icon: Wallet, accent: "text-finance" },
+  due_expired: { label: "Policy expired", icon: ShieldCheck, accent: "text-risk" },
+  due_missing: { label: "Policy missing", icon: ShieldCheck, accent: "text-risk" },
 };
 
 const FILTERS = ["all", "unread", "warning"] as const;
@@ -49,7 +54,12 @@ function AlertCard({ n, onRead, index }: { n: Notification; onRead: () => void; 
           <span className={`font-semibold tracking-wide uppercase ${warning ? "text-warn" : "text-insurance"}`}>{meta.label}</span>
           {!n.read && <span className="h-1.5 w-1.5 rounded-full bg-gold" aria-label="unread" />}
           <span className="ml-auto text-taupe">
-            snapshot #{n.snapshot_id} · {formatRelative(n.created_at)}
+            {n.snapshot_id !== null ? `snapshot #${n.snapshot_id}` : n.domain ? (
+              <Link to={`/twin/${n.domain}`} onClick={(e) => e.stopPropagation()} className="text-champagne hover:underline">
+                Open {n.domain === "finance" ? "Financial" : n.domain[0].toUpperCase() + n.domain.slice(1)} Twin
+              </Link>
+            ) : ""}{" "}
+            · {formatRelative(n.created_at)}
           </span>
         </div>
         <p className="mt-2 text-sm leading-relaxed text-ivory/90">{n.message}</p>

@@ -50,11 +50,25 @@ ESTIMATED_COST_TABLE: dict[str, dict[str, float]] = {
 }
 
 # Recommended riders keyed to health risk signals
+SERIOUS_CONDITIONS = {"heart_attack", "stroke", "heart_disease", "cancer", "kidney_disease"}
+
+# Extra 5-year cost (INR) for diagnosed conditions recorded as life events; illustrative.
+CONDITION_COST_TABLE: dict[str, float] = {
+    "heart_attack": 900_000,
+    "stroke": 800_000,
+    "heart_disease": 600_000,
+    "cancer": 1_500_000,
+    "kidney_disease": 700_000,
+    "diabetes": 300_000,
+    "hypertension": 100_000,
+}
+
 RECOMMENDED_RIDERS: list[dict] = [
     {
         "rider": "Critical Illness Rider",
         "trigger": lambda hp: hp.get("cardio_risk", {}).get("label") in
-                   ("High", "Very High", "Elevated"),
+                   ("High", "Very High", "Elevated")
+                   or bool(SERIOUS_CONDITIONS & set(hp.get("conditions", []))),
     },
     {
         "rider": "Diabetes Care Rider",
@@ -161,6 +175,7 @@ class InsuranceTwin:
                 "gap_count": len(gaps),
             },
             "insurance_adequacy_score": score,
+            "portfolio": self._portfolio(inputs, annual_income),
             "disclaimer": (
                 "These estimates are illustrative guidance for academic "
                 "purposes only and do not constitute licensed financial or "
@@ -172,6 +187,23 @@ class InsuranceTwin:
         self.latest_finance_profile = finance_profile
         self.latest_profile = profile
         return profile
+
+    @staticmethod
+    def _portfolio(inputs: dict, annual_income: float) -> dict:
+        """All policies held, beyond health cover (vehicle, life, home...)."""
+        policies = list(inputs.get("policies", []))
+        life_cover = sum(p.get("cover", 0) for p in policies if p.get("type") == "life")
+        # A common planning rule of thumb: life cover of about 10x annual income.
+        recommended_life = 10 * (annual_income or 0)
+        return {
+            "policies": policies,
+            "health_cover": inputs["sum_insured"],
+            "total_annual_premium": round(inputs["annual_premium"] + sum(p.get("premium", 0) for p in policies), 2),
+            "life_cover": life_cover,
+            "life_cover_recommended": recommended_life,
+            "life_cover_gap": max(0.0, recommended_life - life_cover),
+            "types_held": sorted({p.get("type") for p in policies} | ({"health"} if inputs["sum_insured"] > 0 else set())),
+        }
 
     def simulate(self, modified_inputs: dict) -> dict:
         """Return before/after profiles for hypothetical policy changes.
@@ -240,6 +272,9 @@ class InsuranceTwin:
         breakdown["hypertension"] = ESTIMATED_COST_TABLE["hypertension"].get(
             bp_stage_str, 10_000,
         )
+
+        for condition in health_profile.get("conditions", []):
+            breakdown[f"{condition} (history)"] = CONDITION_COST_TABLE.get(condition, 200_000)
 
         return breakdown
 
