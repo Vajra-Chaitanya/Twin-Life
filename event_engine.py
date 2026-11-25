@@ -84,7 +84,7 @@ def _event(kind: str, summary: str, ops: list[dict], commitment: dict | None = N
 # Twins an event type belongs to even when its ops touch only one domain (a paid surgery is health + finance).
 TYPE_DOMAINS = {
     "condition": {"health"}, "illness": {"health"}, "weight": {"health"}, "bp": {"health"}, "glucose": {"health"},
-    "habit": {"health"}, "medical_bill": {"health", "finance"}, "loan": {"finance"}, "purchase": {"finance"},
+    "habit": {"health"}, "diet": {"health"}, "medical_bill": {"health", "finance"}, "loan": {"finance"}, "purchase": {"finance"},
     "loan_closed": {"finance"}, "income": {"finance"}, "expense": {"finance"}, "spend": {"finance"},
     "savings": {"finance"}, "emis": {"finance"}, "borrowed": {"finance"}, "repayment": {"finance"},
     "lent": {"finance"}, "subscription": {"finance"}, "cover": {"insurance"}, "premium": {"insurance", "finance"},
@@ -306,20 +306,42 @@ def _policy(s: str, insurance: dict, today: date) -> dict | None:
             if not existing:
                 return _event("policy", f"{name} ended", [], log=True)
             return _event("policy", f"{name} ended", [_op("insurance", "policies", "remove", existing)])
-        if not re.search(r"\b(bought|took|got|renewed|purchased|started|added|have|activated)\b", lowered):
+        if not re.search(r"\b(bought|took|got|renewed|purchased|started|added|have|activated|renewal|renews|expires)\b", lowered):
             return None
-        premium = _amount_after(lowered, r"premium(?: of| is)?")
-        amounts = [a for a in money_amounts(lowered) if a != premium]
+        date_match = re.search(r"\b\d{4}-\d{2}-\d{2}\b", lowered)
+        renewal_date = None
+        if date_match:
+            try:
+                renewal_date = date.fromisoformat(date_match.group()).isoformat()
+            except ValueError:
+                return _event("policy", f"{name} renewal date needs clarification", [],
+                              needs="What is the valid renewal date in YYYY-MM-DD format?")
+        amounts_text = re.sub(r"\b\d{4}-\d{2}-\d{2}\b", "", lowered)
+        premium = _amount_after(amounts_text, r"premium(?: of| is)?")
+        amounts = [a for a in money_amounts(amounts_text) if a != premium]
         cover = max(amounts) if amounts and (len(amounts) > 1 or kind in ("life", "home") or amounts[0] >= 100_000) else None
         if premium is None:
             small = [a for a in amounts if a != cover]
             premium = small[0] if small else None
-        policy = {"type": kind, "name": name, "cover": cover or 0, "premium": premium or 0,
-                  "renewal_date": _add_months(today, 12)}
+        if premium is not None:
+            money_pattern = r"(?:₹|rs\.?|inr)?\s*\d[\d,]*(?:\.\d+)?\s*(?:" + MULT_PATTERN + r")?\b"
+            monthly_premium = any(
+                money_amounts(match.group()) == [premium]
+                and (_MONTHLY.match(amounts_text[match.end():].lstrip())
+                     or re.search(r"\bmonthly\s+premium(?:\s+(?:of|is))?\s*$", amounts_text[:match.start()]))
+                for match in re.finditer(money_pattern, amounts_text, re.IGNORECASE)
+            )
+            if monthly_premium:
+                premium *= 12
+        policy = {"type": kind, "name": name,
+              "cover": cover if cover is not None else (existing or {}).get("cover", 0),
+              "premium": premium if premium is not None else (existing or {}).get("premium", 0),
+                  "renewal_date": renewal_date, "renewal_confirmed": renewal_date is not None}
         ops = ([_op("insurance", "policies", "remove", existing)] if existing else []) + [_op("insurance", "policies", "append", policy)]
         verb = "Renewed" if existing or "renew" in lowered else "Took"
         details = ", ".join(x for x in (f"cover {inr(cover)}" if cover else "", f"premium {inr(premium)}/yr" if premium else "") if x)
-        return _event("policy", f"{verb} {name}" + (f" ({details})" if details else "") + f", renews {policy['renewal_date']}",
+        return _event("policy", f"{verb} {name}" + (f" ({details})" if details else "") +
+                  (f", renews {renewal_date}" if renewal_date else ", renewal date not recorded"),
                       ops, commitment={"item": name, "policy_type": kind, "premium": premium or 0,
                                        "renewal_date": policy["renewal_date"], "emi": 0, "policy": True})
     return None
@@ -455,7 +477,8 @@ def _health(s: str, health: dict) -> list[dict]:
     # A relative's illness is family history, not the user's own condition.
     own = not FAMILY.search(lowered)
     for pattern, code, label in CONDITIONS:
-        if own and diagnosed and re.search(pattern, lowered) and code not in health.get("conditions", []):
+        denied = re.search(rf"\b(?:no|not|never|don't|dont|do not)\s+(?:(?:have|had|diagnosed with)\s+)?(?:{pattern})", lowered)
+        if own and diagnosed and not denied and re.search(pattern, lowered) and code not in health.get("conditions", []):
             events.append(_event("condition", f"{label} recorded in medical history", [_op("health", "conditions", "append", code)]))
     kg = re.search(r"\b(lost|gained|put on|reduced|dropped)\s+(\d+(?:\.\d+)?)\s*(kg|kgs|kilos?)\b", lowered)
     weight_now = re.search(r"\bweight is (now )?(\d+(?:\.\d+)?)\s*(kg|kgs)\b", lowered)
@@ -481,11 +504,35 @@ def _health(s: str, health: dict) -> list[dict]:
             events.append(_event("habit", f"{label} smoking", [_op("health", "smoke", "set", value)]))
         if re.search(rf"\b{verb}\s+(drinking|alcohol)", lowered):
             events.append(_event("habit", f"{label} drinking", [_op("health", "alco", "set", value)]))
+    if re.search(r"\bi\s+(?:do not|don't|dont|never)\s+smoke\b", lowered):
+        events.append(_event("habit", "Does not smoke", [_op("health", "smoke", "set", 0)]))
+    elif re.search(r"\bi\s+(?:currently\s+|regularly\s+)?smoke\b|\bi(?: am|'m)\s+a\s+smoker\b", lowered):
+        events.append(_event("habit", "Currently smokes", [_op("health", "smoke", "set", 1)]))
+    if re.search(r"\bi\s+(?:do not|don't|dont|never)\s+drink\s+(?:alcohol|beer|wine)\b", lowered):
+        events.append(_event("habit", "Does not drink alcohol", [_op("health", "alco", "set", 0)]))
+    elif re.search(r"\bi\s+(?:currently\s+|regularly\s+)?drink\s+(?:alcohol|beer|wine)\b", lowered):
+        events.append(_event("habit", "Currently drinks alcohol", [_op("health", "alco", "set", 1)]))
     if re.search(r"\b(started|began|joined)\s+(going to\s+)?(a\s+|an\s+|the\s+)?(exercis\w*|gym|walking|running|yoga|working out|swimming|cycling|jogging)", lowered):
         events.append(_event("habit", "Started regular exercise", [_op("health", "active", "set", 1)]))
     elif re.search(r"\b(stopped|quit)\s+(going to\s+)?(the\s+)?(exercis\w*|gym|walking|running|working out|yoga)", lowered):
         events.append(_event("habit", "Stopped exercising", [_op("health", "active", "set", 0)]))
     return events
+
+
+def _dietary_report(s: str) -> dict | None:
+    topic = re.search(
+        r"\b(diet|food|meal|eat|eating|ate|nutrition|supplement|vitamin|protein powder|herbal|salt|sodium|oil|oily|"
+        r"sugar|chocolate|fruit|vegetable|grain|water|hydration|caffeine|beverage|juice|milk|tea|coffee|soda)\w*\b",
+        s, re.IGNORECASE,
+    )
+    behavior = re.search(
+        r"^\s*(?:(?:i|we)\s+)?(?:(?:am|was|have|had)\s+)?(?:started|began|increased|reduced|cut|stopped|quit|added|take|takes|taking|"
+        r"use|using|eat|eating|ate|consume|consuming|consumed|drink|drinking|drank)\b",
+        s, re.IGNORECASE,
+    )
+    if not topic or not behavior:
+        return None
+    return _event("diet", f"Diet or supplement reported: {s.strip()}", [], log=True)
 
 
 def _insurance(s: str, insurance: dict) -> list[dict]:
@@ -507,8 +554,9 @@ def _insurance(s: str, insurance: dict) -> list[dict]:
                        needs="Do you have any other health cover now? If yes, what is its sum insured; if not, I'll set your cover to ₹0.")]
     cover_m = re.search(r"\b(sum insured|cover(?:age)?|policy)\b", lowered)
     changed = re.search(r"\b(increased|raised|upgraded|switched|changed|reduced|is now|now|became)\b", lowered)
+    stated_cover = re.search(r"\bmy\s+(?:(?:health|medical)\s+insurance\s+)?(?:sum insured|cover(?:age)?)\s+is\b", lowered)
     cover_amounts = [a for a in money_amounts(lowered) if a >= 50_000]
-    if cover_m and changed and cover_amounts:
+    if cover_m and (changed or stated_cover) and cover_amounts:
         if re.search(r"\bby\b", lowered):
             return events + [_event("cover", f"Sum insured up by {inr(cover_amounts[0])}",
                                     [_op("insurance", "sum_insured", "add", cover_amounts[0])])]
@@ -583,6 +631,9 @@ def detect_events(
                     break
         health_events = _health(s, health)
         events.extend(health_events)
+        dietary = _dietary_report(s)
+        if dietary:
+            events.append(dietary)
         episode = _illness(s)
         if episode and not any(e["type"] == "condition" for e in health_events):
             events.append(episode)
@@ -758,9 +809,12 @@ def compute_dues(events: list[dict], insurance: dict, today: date | None = None)
                      "detail": f"Monthly until {end.isoformat()}" + (f" ({remaining} after this)" if remaining is not None else "")
                      if end else "Monthly, tenure not recorded"})
     for p in insurance.get("policies", []):
-        if not p.get("renewal_date"):
+        if not p.get("renewal_date") or not p.get("renewal_confirmed"):
             continue
-        renew = date.fromisoformat(p["renewal_date"])
+        try:
+            renew = date.fromisoformat(p["renewal_date"])
+        except (TypeError, ValueError):
+            continue
         days = (renew - today).days
         status = "expired" if days < 0 else "due_soon" if days <= 30 else "upcoming"
         dues.append({"kind": "renewal", "domain": "insurance", "title": f"{p['name']} renewal", "amount": p.get("premium", 0),

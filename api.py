@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import threading
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Literal
 
@@ -172,7 +173,8 @@ class Policy(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     cover: float = Field(default=0, ge=0)
     premium: float = Field(default=0, ge=0)
-    renewal_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    renewal_date: date | None = None
+    renewal_confirmed: bool = False
 
 
 class InsuranceInputs(BaseModel):
@@ -252,6 +254,13 @@ class WhatIfRequest(BaseModel):
     purchase_cost: float = Field(ge=0, le=1e10)
 
 
+class AdviceSimulationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: str = Field(min_length=1, max_length=100)
+    advice: str = Field(min_length=2, max_length=1000)
+
+
 class QueryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -268,6 +277,12 @@ class MarkReadRequest(BaseModel):
     ids: list[int] | None = Field(default=None, max_length=500)
 
 TWIN_PAGES = {"health": "Health Twin", "finance": "Financial Twin", "insurance": "Insurance Twin"}
+TOPIC_WORDS = {
+    "health": re.compile(r"\b(health\w*|heart|bp|blood|sugar|diabet\w*|weight|diet|food|eat\w*|ate|exercis\w*|sleep\w*|smok\w*"
+                         r"|drink\w*|alcohol|doctor|symptom\w*|pain|cholesterol|medic\w*|fever|ill\w*|sick)\b", re.IGNORECASE),
+    "finance": re.compile(r"\b(money|salary|income|savings?|spend\w*|budget|invest\w*|expenses?|financ\w*)\b", re.IGNORECASE),
+    "insurance": re.compile(r"\b(insur\w*|cover\w*|polic\w*|premium|riders?|claim\w*|sum insured)\b", re.IGNORECASE),
+}
 
 
 
@@ -276,7 +291,8 @@ def _key_metrics(profiles: dict) -> dict:
     return {
         "Health score": h.get("overall_health_score"),
         "CVD risk %": round(h.get("cardio_risk", {}).get("probability", 0) * 100, 1),
-        "Diabetes risk %": round((h.get("diabetes_risk") or {}).get("probability", 0) * 100, 1),
+        "Diabetes risk %": (round(h["diabetes_risk"]["probability"] * 100, 1)
+                    if h.get("diabetes_risk") else None),
         "Debt-to-income %": round(f.get("dti_ratio", 0) * 100),
         "Free cash / month": round(f.get("disposable_income", 0)),
         "Stability score": f.get("financial_stability_score"),
@@ -291,6 +307,148 @@ def _metric_changes(before: dict, after: dict) -> list[dict]:
         for k in before
         if before[k] != after.get(k)
     ]
+
+
+def _factor_values(profiles: dict) -> list[dict]:
+    """Flatten user-visible computed factors across all three twins."""
+    health, finance, insurance = profiles["health"], profiles["finance"], profiles["insurance"]
+    values = []
+
+    def add(domain: str, label: str, value, unit: str = "") -> None:
+        if isinstance(value, float) and not math.isfinite(value):
+            value = None
+        values.append({"domain": domain, "label": label, "value": value, "unit": unit})
+
+    add("health", "Overall health score", health.get("overall_health_score"), "points")
+    add("health", "BMI", health.get("bmi"), "kg/m2")
+    add("health", "BMI category", health.get("obesity_class"))
+    add("health", "Blood pressure category", health.get("hypertension_stage"))
+    add("health", "Cardiovascular model estimate", round(health.get("cardio_risk", {}).get("probability", 0) * 100, 1), "%")
+    add("health", "Cardiovascular model category", health.get("cardio_risk", {}).get("label"))
+    add("health", "Diabetes indicator", health.get("diabetes_indicator"))
+    diabetes_risk = health.get("diabetes_risk")
+    add("health", "Diabetes model estimate", round(diabetes_risk["probability"] * 100, 1) if diabetes_risk else None, "%")
+    add("health", "Framingham estimate", health.get("framingham_10yr_risk"), "%")
+    add("health", "Diagnosed-condition adjustment", health.get("condition_penalty", 0), "points deducted")
+    for component in health.get("score_components", []):
+        add("health", f"{component['label']} component score", component["score"], "points")
+        add("health", f"{component['label']} weighted contribution", component["weighted_points"], "points")
+
+    add("finance", "Debt-to-income ratio", round(finance.get("dti_ratio", 0) * 100, 1), "%")
+    add("finance", "Savings rate", round(finance.get("savings_rate", 0) * 100, 1), "%")
+    add("finance", "Emergency fund", finance.get("emergency_fund_months"), "months")
+    add("finance", "Financial stability score", finance.get("financial_stability_score"), "points")
+    add("finance", "Disposable income", finance.get("disposable_income"), "INR/month")
+    add("finance", "Monthly income", finance.get("monthly_income"), "INR/month")
+    add("finance", "Monthly expenses", finance.get("monthly_expenses"), "INR/month")
+    add("finance", "Savings balance", finance.get("savings_balance"), "INR")
+
+    portfolio = insurance.get("portfolio", {})
+    add("insurance", "Insurance adequacy score", insurance.get("insurance_adequacy_score"), "points")
+    add("insurance", "Projected 5-year medical cost", insurance.get("estimated_future_cost"), "INR")
+    add("insurance", "Coverage adequacy ratio", insurance.get("coverage_adequacy_ratio"), "ratio")
+    premium_ratio = insurance.get("premium_affordability_ratio")
+    add("insurance", "Premium affordability ratio", round(premium_ratio * 100, 2) if premium_ratio is not None else None, "%")
+    add("insurance", "Rider gaps", insurance.get("rider_analysis", {}).get("gap_count"), "count")
+    add("insurance", "Health cover", portfolio.get("health_cover"), "INR")
+    add("insurance", "Annual portfolio premiums", portfolio.get("total_annual_premium"), "INR/year")
+    add("insurance", "Recorded life cover", portfolio.get("life_cover"), "INR")
+    add("insurance", "Illustrative life cover gap", portfolio.get("life_cover_gap"), "INR")
+    add("insurance", "Recorded policy count", len(portfolio.get("policies", [])), "count")
+    add("insurance", "Policy types held", ", ".join(portfolio.get("types_held", [])))
+    for name, amount in insurance.get("cost_breakdown", {}).items():
+        add("insurance", f"Projected cost: {name}", amount, "INR")
+    return values
+
+
+def _factor_impacts(before_profiles: dict, after_profiles: dict) -> list[dict]:
+    """Compare every flattened computed factor, including unchanged and unavailable values."""
+    before_values = {(f["domain"], f["label"]): f for f in _factor_values(before_profiles)}
+    after_values = {(f["domain"], f["label"]): f for f in _factor_values(after_profiles)}
+    impacts = []
+    keys = list(dict.fromkeys([*before_values, *after_values]))
+    for domain, label in keys:
+        previous = before_values.get((domain, label))
+        current = after_values.get((domain, label))
+        before = previous["value"] if previous else None
+        after = current["value"] if current else None
+        numeric = isinstance(before, (int, float)) and isinstance(after, (int, float))
+        changed = before != after
+        impacts.append({
+            "domain": domain, "label": label,
+            "before": before, "after": after, "unit": (current or previous)["unit"],
+            "delta": round(after - before, 4) if changed and numeric else None,
+            "status": "unavailable" if before is None and after is None else "changed" if changed else "unchanged",
+        })
+    return impacts
+
+
+def _health_impacts(
+    ops: list[dict], before: dict, after: dict, health_profile: dict, event_type: str = "",
+    before_health_profile: dict | None = None,
+) -> list[dict]:
+    fields = {op["field"] for op in ops if op["domain"] == "health"}
+    if not fields:
+        if event_type == "illness":
+            return [{"label": label, "before": None, "after": None,
+                     "note": "This episode is recorded, but its effect is not calculated by the current models."}
+                    for label in ("Health score", "CVD model estimate", "Diabetes model estimate")]
+        if event_type != "diet":
+            return []
+        unmodeled_note = ("Recorded. Saved scores change once a measured value (weight, blood pressure, glucose) "
+                          "changes; see the projection for what this habit could do.")
+        impacts = [{"label": "Health score", "before": before.get("Health score"),
+                    "after": after.get("Health score"), "note": unmodeled_note}]
+    else:
+        impacts = [{"label": "Health score", "before": before.get("Health score"),
+                    "after": after.get("Health score"), "note": "An illustrative composite, not a clinical measure."}]
+
+    penalty_before = (before_health_profile or {}).get("condition_penalty", 0)
+    penalty_after = health_profile.get("condition_penalty", 0)
+    if penalty_before or penalty_after:
+        impacts.append({"label": "Diagnosed-condition adjustment", "before": penalty_before,
+                        "after": penalty_after,
+                        "note": "Points subtracted separately from the five weighted components; capped at 35."})
+
+    previous_components = {c["key"]: c for c in (before_health_profile or {}).get("score_components", [])}
+    current_components = {c["key"]: c for c in health_profile.get("score_components", [])}
+    component_note = (unmodeled_note if not fields and event_type == "diet" else
+                      "Calculated from updated inputs using the current illustrative formula; not a causal or clinical effect.")
+    for key in ("bmi", "blood_pressure", "cardiovascular", "diabetes", "framingham"):
+        current = current_components.get(key)
+        previous = previous_components.get(key, current)
+        if current:
+            impacts.append({
+                "label": current["label"],
+                "before": round(previous["score"], 1) if previous else None,
+                "after": round(current["score"], 1),
+                "weight_percent": current["weight_percent"],
+                "before_weighted_points": round(previous["weighted_points"], 2) if previous else None,
+                "after_weighted_points": round(current["weighted_points"], 2),
+                "note": component_note,
+            })
+
+    if not fields:
+        return impacts
+    cardio_fields = {"age", "gender", "height_cm", "weight_kg", "ap_hi", "ap_lo", "cholesterol", "gluc", "smoke", "alco", "active"}
+    diabetes_fields = {"age", "gender", "height_cm", "weight_kg", "ap_hi", "ap_lo", "smoke", "hba1c", "blood_glucose_level"}
+    modeled_condition = any(op["domain"] == "health" and op["field"] == "conditions" and
+                            op["value"] in {"heart_attack", "heart_disease", "stroke", "hypertension"} for op in ops)
+    if fields & cardio_fields:
+        impacts.append({"label": "CVD model estimate", "before": before.get("CVD risk %"),
+                        "after": after.get("CVD risk %"), "note": "Research model estimate, not a forecast or causal effect."})
+    if fields & diabetes_fields or modeled_condition:
+        reason = health_profile.get("diabetes_unavailable_reason")
+        note = ("A measured HbA1c is required." if reason == "missing_hba1c" else
+                "The diabetes model is unavailable." if reason == "model_unavailable" else
+            "A diabetes estimate is unavailable for this snapshot." if after.get("Diabetes risk %") is None else
+                "Research model estimate, not a forecast or diagnosis.")
+        impacts.append({"label": "Diabetes model estimate", "before": before.get("Diabetes risk %"),
+                        "after": after.get("Diabetes risk %"), "note": note})
+    elif "alco" in fields:
+        impacts.append({"label": "Diabetes model estimate", "before": None, "after": None,
+                        "note": "Alcohol is not an input to this diabetes model; its effect cannot be estimated."})
+    return impacts
 
 
 def _notification_response(record: NotificationRecord) -> dict:
@@ -309,8 +467,51 @@ def _friendly_ai_error(message: str) -> str:
     return "The AI service could not complete this request."
 
 
+SMALL_TALK = re.compile(
+    r"\s*(hi+|hello+|hey+|hii+|good (morning|afternoon|evening)|thanks?|thank you|thx|ok(ay)?|bye|namaste)"
+    r"[\s!.,?]*(there|advisor|twin)?[\s!.,?]*",
+    re.IGNORECASE,
+)
+
+
+def _small_talk_reply(text: str, domain: str | None) -> str:
+    if re.match(r"\s*(thanks?|thank you|thx)", text, re.IGNORECASE):
+        return "You're welcome. Ask me anything else about your twin whenever you like."
+    if re.match(r"\s*bye", text, re.IGNORECASE):
+        return "Goodbye. Your twin and conversation are saved for next time."
+    scope = {"health": "your health", "finance": "your finances", "insurance": "your insurance"}.get(
+        domain or "", "your health, finances or insurance")
+    return (f"Hi! Ask me a question about {scope}, or tell me what changed "
+            "and I'll update your twin.")
+
+
+def _advice_key(line: str) -> str:
+    return re.sub(r"\s+", " ", line.replace("**", "")).strip().lower()
+
+
+def _simulatable_advice(result: dict, inputs: tuple[dict, dict, dict] | None) -> list[str]:
+    """Keys of list lines in an answer that would actually change a twin input when simulated."""
+    from scenario_engine import advice_to_changes
+
+    if inputs is None:
+        return []
+    texts = [result.get("narration") or "", ((result.get("simulation") or {}).get("recommendation") or "")]
+    keys = []
+    for text in texts:
+        # Mirrors the frontend Markdown split of run-together list items.
+        text = re.sub(r"([^\d\s][.!?:])\s*(\d{1,2}[.)]\s+\S)", r"\1\n\2", text)
+        for raw in text.splitlines():
+            item = re.match(r"\s*(?:[-*•]|\d+[.)])\s+(.*)", raw)
+            if item and any(not c["already"] for c in advice_to_changes(item.group(1), *inputs)):
+                keys.append(_advice_key(item.group(1)))
+    return keys
+
+
 def _build_query_result(query: str, state: dict, citations: list[dict]) -> dict:
     routing = state.get("routing") or {}
+    if routing.get("mode") == "small_talk":
+        return {"query": query, "routing": routing, "pipeline": ["route"], "narration": state["narration"],
+                "narration_error": None, "citations": [], "simulation": None, "scenarios": []}
     pipeline = ["route"]
     pipeline += [d for d in ("health", "finance", "insurance") if state.get(f"{d}_profile")]
     pipeline.append("rag")
@@ -327,9 +528,13 @@ def _build_query_result(query: str, state: dict, citations: list[dict]) -> dict:
     simulation = state.get("simulation_result")
     if isinstance(simulation, dict) and "error" in simulation:
         error = str(simulation["error"])
-        simulation = {
-            "error": error if error.startswith("Please include") else _friendly_ai_error(error),
-        }
+        asked_treatment = re.search(r"\b(treatment|surgery|operation|procedure|hospital\w*|medication)\b", query, re.IGNORECASE)
+        if error.startswith("Please include") and not asked_treatment:
+            simulation = None
+        else:
+            simulation = {
+                "error": error if error.startswith("Please include") else _friendly_ai_error(error),
+            }
 
     return {
         "query": query,
@@ -628,11 +833,18 @@ def create_app(
         ops = [op for e in ready for op in e["ops"]]
         if not ops:
             # Timeline-only episodes: nothing to recompute.
-            return [store_event(session, user_id, {**e, "previous": {}, "snapshot_id": None, "changes": [],
-                                                    "alerts_generated": 0, "source": source, "undone": False})
-                    for e in ready]
+            profiles = run_twins(*load_inputs(session, user_id))
+            metrics = _key_metrics(profiles)
+            return [store_event(session, user_id, {
+                **e, "previous": {}, "snapshot_id": None, "changes": [],
+                "factor_impacts": _factor_impacts(profiles, profiles),
+                "health_impacts": _health_impacts([], metrics, metrics, profiles["health"],
+                                                  e["type"], profiles["health"]),
+                "alerts_generated": 0, "source": source, "undone": False,
+            }) for e in ready]
         health, finance, insurance = load_inputs(session, user_id)
-        before = _key_metrics(run_twins(health, finance, insurance))
+        before_profiles = run_twins(health, finance, insurance)
+        before = _key_metrics(before_profiles)
         new_h, new_f, new_i = apply_ops(health, finance, insurance, ops)
         save_inputs(session, user_id, new_h, new_f, new_i)
         snapshot, alert_count = store_assessment(session, user_id)
@@ -645,6 +857,9 @@ def create_app(
                 "previous": {op["domain"] + "." + op["field"]: previous_values[op["domain"]][op["field"]] for op in e["ops"]},
                 "snapshot_id": snapshot.id,
                 "changes": _metric_changes(before, after),
+                "factor_impacts": _factor_impacts(before_profiles, snapshot.payload),
+                "health_impacts": _health_impacts(e["ops"], before, after, snapshot.payload["health"],
+                                                  e["type"], before_profiles["health"]),
                 "alerts_generated": alert_count,
                 "source": source,
                 "undone": False,
@@ -667,10 +882,11 @@ def create_app(
         events = [{"date": r.created_at.date().isoformat(), **r.payload} for r in stored_events(session, user_id)]
         live = [e for e in events if not e.get("undone")]
         return {
-            "recent_events": [{"date": e["date"], "summary": e["summary"]} for e in live[-10:]],
+            "recent_events": [{"date": e["date"], "summary": e["summary"], "domains": e.get("domains", [])}
+                              for e in live[-10:]],
             "commitments": active_commitments(live),
             "just_recorded": [{"summary": e["summary"] + (" (logged in history only; scores unchanged)" if e.get("log") else ""),
-                               "changes": e["changes"]} for e in just_recorded],
+                               "changes": e["changes"], "health_impacts": e.get("health_impacts", [])} for e in just_recorded],
             "just_reverted": [{"summary": e["summary"], "changes": e["changes"]} for e in (reverted or [])],
             "pending_questions": [e["needs"] for e in pending],
         }
@@ -801,6 +1017,19 @@ def create_app(
             .limit(limit),
         ).all()
         items = [_notification_response(r) for r in records]
+        try:
+            current_renewals = {
+                f"{due['kind']}:{due['title']}:{due['due_date']}:{due['status']}"
+                for due in dues_for(session, user_id)
+                if due["kind"] == "renewal" and due["status"] in DUE_ALERTS
+            }
+        except HTTPException:
+            current_renewals = set()
+        for item in items:
+            data = item.get("data") or {}
+            if data.get("kind") == "renewal" and data.get("key") not in current_renewals:
+                item.update({"historical": True, "read": True,
+                             "message": "Earlier renewal alert is no longer current or the policy date is unverified."})
         return {
             "user_id": user_id,
             "unread": sum(1 for n in items if not n.get("read")),
@@ -861,6 +1090,31 @@ def create_app(
             },
         })
 
+    @app.post("/simulate-advice")
+    def simulate_advice(
+        payload: AdviceSimulationRequest,
+        session: Session = Depends(get_session),
+    ) -> dict:
+        from scenario_engine import advice_to_changes
+
+        health_inputs, finance_inputs, insurance_inputs = load_inputs(session, payload.user_id)
+        derived = advice_to_changes(payload.advice, health_inputs, finance_inputs, insurance_inputs)
+        changes = [c for c in derived if not c["already"]]
+        by_domain = {d: {c["field"]: c["target"] for c in changes if c["domain"] == d}
+                     for d in ("health", "finance", "insurance")}
+        before = run_twins(health_inputs, finance_inputs, insurance_inputs)
+        after = run_twins({**health_inputs, **by_domain["health"]}, {**finance_inputs, **by_domain["finance"]},
+                          {**insurance_inputs, **by_domain["insurance"]}) if changes else before
+        return json_safe({
+            "user_id": payload.user_id,
+            "advice": payload.advice,
+            "changes": changes,
+            "already_met": [c for c in derived if c["already"]],
+            "before": before,
+            "after": after,
+            "factor_impacts": [f for f in _factor_impacts(before, after) if f["status"] == "changed"],
+        })
+
     @app.post("/whatif")
     def whatif(
         payload: WhatIfRequest,
@@ -892,14 +1146,15 @@ def create_app(
         inputs = load_inputs(session, payload.user_id)
         typed = payload.query.strip()
 
-        from event_engine import active_commitments, complete_pending, detect_events, detect_revert, event_domains
+        from event_engine import HYPOTHETICAL, active_commitments, complete_pending, detect_events, detect_revert, event_domains
 
         domain = payload.domain
         stored = stored_events(session, payload.user_id)
         live = [{"id": r.id, **r.payload} for r in stored if not r.payload.get("undone")
                 and (domain is None or domain in event_domains(r.payload))]
         commitments = active_commitments(live)
-        previous = [r for r in user_chats(session, payload.user_id) if thread_of(r) == payload.thread_id][:3]
+        previous = [r for r in user_chats(session, payload.user_id)
+                if thread_of(r) == payload.thread_id and r.result.get("domain") == domain][:3]
 
         def understood(r: ChatHistoryRecord) -> str:
             return r.result.get("refined_query") or r.query
@@ -933,6 +1188,20 @@ def create_app(
         context = life_context(session, payload.user_id, recorded, pending, reverted)
         context["dues"] = [d for d in dues_for(session, payload.user_id)
                            if d["status"] != "upcoming" and (domain is None or d["domain"] == domain)][:8]
+        if not (recorded or reverted or pending):
+            context_text = text
+            if previous and re.search(r"\b(what about|how about|and if|it|that)\b", text, re.IGNORECASE):
+                context_text = f"{understood(previous[0])} {text}"
+            obligations = re.search(r"\b(owe|owed|debt|dues?|commitments?|payments?|loans?|emis?|polic(?:y|ies)|renewals?|history|events?)\b", context_text, re.IGNORECASE)
+            financial_plan = HYPOTHETICAL.search(context_text) and re.search(
+                r"\b(buy|purchase|afford|borrow|spend|pay|cost|car|bike|house|insurance|cover|premium|treatment|surgery)\w*\b",
+                context_text, re.IGNORECASE,
+            )
+            if not obligations and not financial_plan:
+                topics = {domain} if domain else {d for d, rx in TOPIC_WORDS.items() if rx.search(context_text)}
+                context["recent_events"] = [e for e in context["recent_events"] if topics & set(e["domains"])]
+                context["commitments"] = []
+                context["dues"] = []
         history = [
             {
                 "query": understood(r),
@@ -941,8 +1210,12 @@ def create_app(
             }
             for r in reversed(previous)
         ]
-        state, citations = run_query(text, *inputs, history=history, life_context=context,
-                                     **({"domain": domain} if domain else {}))
+        if not (recorded or reverted or pending) and SMALL_TALK.fullmatch(text):
+            state, citations = {"routing": {"twins": [], "mode": "small_talk", "simulate": False},
+                                "narration": _small_talk_reply(text, domain)}, []
+        else:
+            state, citations = run_query(text, *inputs, history=history, life_context=context,
+                                         **({"domain": domain} if domain else {}))
         result = json_safe({
             **_build_query_result(text, state, citations),
             "query": typed,
@@ -957,7 +1230,8 @@ def create_app(
         record = ChatHistoryRecord(user_id=payload.user_id, query=typed, result=result)
         session.add(record)
         session.commit()
-        return {"chat_id": record.id, "created_at": record.created_at.isoformat(), **result}
+        return {"chat_id": record.id, "created_at": record.created_at.isoformat(), **result,
+                "simulatable": _simulatable_advice(result, load_inputs(session, payload.user_id))}
 
     @app.get("/chat-history")
     def chat_history(
@@ -981,11 +1255,16 @@ def create_app(
             t["created_at"] = r.created_at.isoformat()
             t.setdefault("updated_at", r.created_at.isoformat())
         selected = [r for r in records if thread_id is None or thread_of(r) == thread_id][:limit]
+        try:
+            inputs = load_inputs(session, user_id)
+        except HTTPException:
+            inputs = None
         return {
             "user_id": user_id,
             "threads": sorted(threads.values(), key=lambda t: t["updated_at"], reverse=True),
             "messages": [
-                {"chat_id": r.id, "created_at": r.created_at.isoformat(), **r.result}
+                {"chat_id": r.id, "created_at": r.created_at.isoformat(), **r.result,
+                 "simulatable": _simulatable_advice(r.result, inputs)}
                 for r in reversed(selected)
             ],
         }

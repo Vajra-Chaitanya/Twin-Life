@@ -48,3 +48,13 @@ def test_insurance_simulation_requires_baseline_assessment():
         match=r"Call assess\(\) before simulate\(\)",
     ):
         InsuranceTwin().simulate({"sum_insured": 1_000_000})
+
+
+def test_recorded_diabetes_triggers_rider_review_even_with_low_glucose_indicator():
+    profile = InsuranceTwin().assess(
+        {"sum_insured": 500_000, "annual_premium": 15_000, "annual_income": 1_200_000, "existing_riders": []},
+        {"cardio_risk": {"label": "Low"}, "diabetes_indicator": "Low",
+         "hypertension_stage": "Normal", "conditions": ["diabetes"]},
+        {"financial_stability_score": 80},
+    )
+    assert "Diabetes Care Rider" in profile["rider_analysis"]["gaps"]

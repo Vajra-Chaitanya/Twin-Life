@@ -1,6 +1,19 @@
 import narration_agent
 
 
+def test_truncated_answer_is_trimmed_to_last_complete_line():
+    text = "**Verdict.**\n\nYour plan:\n1. Quit smoking.\n2. Schedule a comprehensive cardiovascular evaluation to mon"
+    assert narration_agent._trim_to_complete(text).endswith("1. Quit smoking.")
+    assert narration_agent._trim_to_complete("Done.") == "Done."
+
+
+def test_score_components_are_not_described_as_risk():
+    line = narration_agent._impact_line({"label": "Cardiovascular model", "before": 52.9, "after": 52.5,
+                                         "weight_percent": 25, "before_weighted_points": 13.2,
+                                         "after_weighted_points": 13.1, "note": "x"})
+    assert "not a risk %" in line and "Health model impact" not in line
+
+
 def test_explanation_prompt_includes_question_and_recent_history(monkeypatch):
     captured = {}
     monkeypatch.setattr(narration_agent, "_get_gemini_client", lambda: object())
@@ -73,3 +86,16 @@ def test_life_context_reaches_the_prompt(monkeypatch):
     assert "Debt-to-income %: 35 -> 50" in captured["user"]
     assert "- How much more per month are your medical costs?" in captured["user"]
     assert "ACTIVE COMMITMENTS" in captured["system"]
+
+
+def test_system_prompt_requires_question_relevance(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(narration_agent, "_get_gemini_client", lambda: object())
+    monkeypatch.setattr(narration_agent, "_call_gemini", lambda client, system, user, **kw: captured.update(system=system) or "x")
+
+    narration_agent.generate_explanation(twin_outputs={}, shap_features=[], rag_chunks=[], question="Is ice cream bad?")
+
+    assert "personally assigned expert team" in captured["system"]
+    for section in ("For you specifically", "What happens", "Effect on your scores", "Your plan", "Try a simulation"):
+        assert section in captured["system"]
+    assert "Expert assessment" in captured["system"] and "do NOT stop at 'not modeled'" in captured["system"]

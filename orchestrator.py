@@ -504,10 +504,12 @@ class Orchestrator:
         # A message that reported real events (recorded, or waiting on a missing detail) is not a what-if:
         # computing one would double-count it or invent numbers from earlier turns.
         life = state.get("life_context") or {}
-        if life.get("just_recorded") or life.get("just_reverted") or life.get("pending_questions"):
+        recorded = life.get("just_recorded") or []
+        diet_only = recorded and all(e["summary"].startswith("Diet or supplement reported") for e in recorded)
+        if (recorded and not diet_only) or life.get("just_reverted") or life.get("pending_questions"):
             return []
         query = state.get("query", "")
-        if not self._asks_or_plans(query):
+        if not diet_only and not self._asks_or_plans(query):
             return []  # A plain statement ("I walk 10000 steps") is context, not a what-if.
         try:
             context = state.get("context_query") or query

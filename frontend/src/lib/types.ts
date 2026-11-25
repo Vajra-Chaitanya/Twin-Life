@@ -48,8 +48,10 @@ export type HealthProfile = {
   obesity_class: string;
   hypertension_stage: string;
   cardio_risk: { probability: number; label: string };
+  cardio_model_version?: string;
   diabetes_indicator: string;
   diabetes_risk?: DiabetesRisk | null;
+  diabetes_unavailable_reason?: "missing_hba1c" | "model_unavailable" | null;
   diabetes_shap?: ShapFeature[];
   conditions?: string[];
   condition_penalty?: number;
@@ -81,7 +83,7 @@ export type InsuranceProfile = {
 };
 
 export type PolicyType = "vehicle" | "life" | "home" | "travel" | "health_topup" | "gadget" | "other";
-export type Policy = { type: PolicyType; name: string; cover: number; premium: number; renewal_date: string | null };
+export type Policy = { type: PolicyType; name: string; cover: number; premium: number; renewal_date: string | null; renewal_confirmed?: boolean };
 export type Portfolio = {
   policies: Policy[];
   health_cover: number;
@@ -126,6 +128,7 @@ export type Notification = {
   snapshot_id: number | null;
   domain?: Twin;
   read: boolean;
+  historical?: boolean;
 };
 
 export type ChatMessage = {
@@ -146,6 +149,7 @@ export type ChatMessage = {
   updates?: LifeEvent[];
   reverted?: { id: number; summary: string; changes: LifeEvent["changes"] }[];
   pending_questions?: string[];
+  simulatable?: string[];
 };
 
 export type Commitment = {
@@ -170,6 +174,24 @@ export type LifeEvent = {
   domains: Twin[];
   log?: boolean;
   changes: { label: string; before: number | null; after: number | null }[];
+  factor_impacts?: {
+    domain: Twin;
+    label: string;
+    before: number | string | null;
+    after: number | string | null;
+    unit: string;
+    delta: number | null;
+    status: "changed" | "unchanged" | "unavailable";
+  }[];
+  health_impacts?: {
+    label: string;
+    before: number | null;
+    after: number | null;
+    note: string;
+    weight_percent?: number;
+    before_weighted_points?: number | null;
+    after_weighted_points?: number | null;
+  }[];
   commitment?: Commitment | null;
   alerts_generated?: number;
   snapshot_id: number | null;
@@ -211,6 +233,25 @@ export type SimulateResponse = {
   before: Profiles;
   after: Profiles;
   forecast: { months: number; before: SavingsBand[]; after: SavingsBand[] };
+};
+
+export type AdviceChange = {
+  domain: Twin;
+  field: string;
+  label: string;
+  current: number | string[];
+  target: number | string[];
+  basis: string;
+};
+
+export type AdviceSimulationResponse = {
+  user_id: string;
+  advice: string;
+  changes: AdviceChange[];
+  already_met: AdviceChange[];
+  before: Profiles;
+  after: Profiles;
+  factor_impacts: NonNullable<LifeEvent["factor_impacts"]>;
 };
 
 export type WhatIfResponse = {

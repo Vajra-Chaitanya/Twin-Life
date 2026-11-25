@@ -4,8 +4,9 @@ import { AlertTriangle, BookOpen, Bot, History as HistoryIcon, Link2, MessageSqu
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { AgentTrace } from "../components/advisor/AgentTrace";
+import { AdviceSimulation } from "../components/advisor/AdviceSimulation";
 import { ConversationList } from "../components/advisor/ConversationList";
-import { Markdown } from "../components/advisor/Markdown";
+import { adviceKey, Markdown } from "../components/advisor/Markdown";
 import { ScenarioCard } from "../components/advisor/ScenarioCard";
 import { TwinUpdateCard } from "../components/advisor/TwinUpdateCard";
 import { askAdvisor, deleteThread, getChatHistory, renameThread } from "../lib/api";
@@ -93,10 +94,12 @@ function useTypewriter(text: string, enabled: boolean) {
 type UndoProps = { undoneIds: Set<number>; onUndo: (event: LifeEvent) => void; undoing: boolean };
 
 function AssistantMessage({
-  message, animate, selected, onSelect, undo,
-}: { message: ChatMessage; animate: boolean; selected: boolean; onSelect: () => void; undo: UndoProps }) {
+  message, animate, selected, onSelect, undo, onSimulate,
+}: { message: ChatMessage; animate: boolean; selected: boolean; onSelect: () => void; undo: UndoProps; onSimulate: (advice: string) => void }) {
   const { shown, done } = useTypewriter(message.narration, animate);
   const sim = message.simulation;
+  const simulatable = new Set(message.simulatable ?? []);
+  const canSimulate = (line: string) => simulatable.has(adviceKey(line));
 
   return (
     <motion.article
@@ -132,7 +135,7 @@ function AssistantMessage({
         </p>
       ) : (
         <>
-          <Markdown text={shown} />
+          <Markdown text={shown} onSimulate={done ? onSimulate : undefined} canSimulate={canSimulate} />
           {!done && <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-gold align-middle" />}
         </>
       )}
@@ -142,7 +145,7 @@ function AssistantMessage({
           <p className="mb-2 flex items-center gap-2 text-xs font-semibold tracking-widest text-champagne uppercase">
             <Wrench className="h-3.5 w-3.5 text-gold" /> Treatment agent recommendation
           </p>
-          {"error" in sim ? <p className="text-sm text-warn">{sim.error}</p> : <Markdown text={sim.recommendation} />}
+          {"error" in sim ? <p className="text-sm text-warn">{sim.error}</p> : <Markdown text={sim.recommendation} onSimulate={onSimulate} canSimulate={canSimulate} />}
         </motion.div>
       )}
 
@@ -178,6 +181,7 @@ export function Advisor({ domain, embedded = false }: { domain?: Twin; embedded?
   const [noticeDismissed, setNoticeDismissed] = useState(() => embedded || localStorage.getItem(NOTICE_KEY) === "1");
   const [threadId, setThreadIdState] = useState(() => readThread(userId, domain));
   const [showHistory, setShowHistory] = useState(false);
+  const [simulationAdvice, setSimulationAdvice] = useState<string | null>(null);
   const recognition = useRef<SpeechRecognitionLike | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
   const Speech = getSpeechRecognition();
@@ -200,7 +204,8 @@ export function Advisor({ domain, embedded = false }: { domain?: Twin; embedded?
   const lifeEvents = useLifeEvents(userId);
   const ask = useMutation({
     mutationFn: (q: string) => askAdvisor(userId!, q, threadId, domain),
-    onSuccess: (message) => {
+    onSuccess: (message, submittedQuery) => {
+      setDraft((current) => current === submittedQuery ? "" : current);
       queryClient.setQueryData<Awaited<ReturnType<typeof getChatHistory>>>(chatKey, (old) => ({
         user_id: userId!,
         threads: old?.threads ?? [],
@@ -244,7 +249,6 @@ export function Advisor({ domain, embedded = false }: { domain?: Twin; embedded?
   const send = (text: string) => {
     const q = text.trim();
     if (q.length < 2 || ask.isPending) return;
-    setDraft("");
     ask.mutate(q);
   };
   const undo: UndoProps = {
@@ -398,7 +402,7 @@ export function Advisor({ domain, embedded = false }: { domain?: Twin; embedded?
                   <UserRound className="h-4 w-4 text-gold" />
                 </span>
               </motion.div>
-              <AssistantMessage message={m} animate={m.chat_id === freshId} selected={selected?.chat_id === m.chat_id} onSelect={() => setSelectedId(m.chat_id)} undo={undo} />
+              <AssistantMessage message={m} animate={m.chat_id === freshId} selected={selected?.chat_id === m.chat_id} onSelect={() => setSelectedId(m.chat_id)} undo={undo} onSimulate={setSimulationAdvice} />
             </div>
           ))}
 
@@ -493,6 +497,7 @@ export function Advisor({ domain, embedded = false }: { domain?: Twin; embedded?
           <AgentTrace message={ask.isPending ? null : selected} pending={ask.isPending} />
         </div>
       )}
+      {simulationAdvice && <AdviceSimulation userId={userId} advice={simulationAdvice} onClose={() => setSimulationAdvice(null)} />}
     </div>
   );
 }

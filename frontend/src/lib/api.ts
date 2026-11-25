@@ -1,4 +1,5 @@
 import type {
+  AdviceSimulationResponse,
   ChatMessage,
   ChatThread,
   Commitment,
@@ -102,6 +103,9 @@ export const getLifeEvents = (userId: string) =>
 
 export const simulate = (request: SimulateRequest) =>
   apiFetch<SimulateResponse>("/simulate", { method: "POST", body: JSON.stringify(request) });
+
+export const simulateAdvice = (userId: string, advice: string) =>
+  apiFetch<AdviceSimulationResponse>("/simulate-advice", { method: "POST", body: JSON.stringify({ user_id: userId, advice }) });
 
 export const whatIf = (userId: string, purchaseCost: number) =>
   apiFetch<WhatIfResponse>("/whatif", {

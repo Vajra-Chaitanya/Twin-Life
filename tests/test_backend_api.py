@@ -229,6 +229,32 @@ def test_simulate_rejects_invalid_overrides_and_unknown_user():
     app.state.db_engine.dispose()
 
 
+def test_advice_simulation_compares_three_scores_without_saving():
+    app = create_app("sqlite://", health_twin_factory=ResponsiveHealthTwin)
+    client = TestClient(app)
+    user = {"user_id": "synthetic-user-001"}
+    payload = valid_onboarding_payload()
+    payload["health_inputs"]["ap_hi"] = 150
+    client.post("/onboard", json=payload)
+    client.post("/assess", json=user)
+    original = client.get("/inputs", params=user).json()
+    history = client.get("/history", params=user).json()["snapshots"]
+
+    response = client.post("/simulate", json={**user, "health": {"ap_hi": 118},
+                                               "finance": {"emis": 0},
+                                               "insurance": {"sum_insured": 1_000_000},
+                                               "forecast_months": 1})
+    assert response.status_code == 200
+    result = response.json()
+    assert result["before"]["health"]["overall_health_score"] == 40
+    assert result["after"]["health"]["overall_health_score"] == 80
+    assert result["after"]["finance"]["financial_stability_score"] != result["before"]["finance"]["financial_stability_score"]
+    assert "insurance_adequacy_score" in result["after"]["insurance"]
+    assert client.get("/inputs", params=user).json() == original
+    assert client.get("/history", params=user).json()["snapshots"] == history
+    app.state.db_engine.dispose()
+
+
 def test_inputs_returns_latest_onboarding_payload():
     app, _ = make_test_app()
     client = TestClient(app)
@@ -338,6 +364,38 @@ def test_query_passes_same_thread_history_and_lists_threads():
     app.state.db_engine.dispose()
 
 
+def test_new_chat_does_not_inherit_unrelated_life_history():
+    engine, calls = fake_query_engine()
+    refinements = []
+    def refine(text, previous):
+        refinements.append(previous)
+        return {"text": text, "refined": False, "error": None}
+
+    app = create_app("sqlite://", health_twin_factory=FakeHealthTwin, query_engine=engine, query_refiner=refine)
+    client = TestClient(app)
+    client.post("/onboard", json=valid_onboarding_payload())
+    user = "synthetic-user-001"
+    client.post("/query", json={"user_id": user, "thread_id": "old", "query": "I bought a car on EMI of 15000 for 5 years"})
+
+    fresh = client.post("/query", json={"user_id": user, "thread_id": "new", "query": "How is my sleep?"}).json()
+    assert fresh["context_turns"] == 0
+    assert refinements[-1] == [] and calls[-1]["history"] == []
+    assert calls[-1]["life"]["recent_events"] == [] and calls[-1]["life"]["commitments"] == []
+    assert calls[-1]["finance"]["emis"] == 25_000
+
+    client.post("/query", json={"user_id": user, "thread_id": "health", "query": "Should I exercise?"})
+    assert calls[-1]["history"] == [] and calls[-1]["life"]["commitments"] == []
+    client.post("/query", json={"user_id": user, "thread_id": "plan", "query": "Should I buy a bike?"})
+    assert calls[-1]["history"] == [] and calls[-1]["life"]["commitments"][0]["item"] == "car"
+    client.post("/query", json={"user_id": user, "thread_id": "plan", "query": "What about 5k?"})
+    assert calls[-1]["history"][0]["query"] == "Should I buy a bike?"
+    assert calls[-1]["life"]["commitments"][0]["item"] == "car"
+    client.post("/query", json={"user_id": user, "thread_id": "new", "query": "How are you?"})
+    assert calls[-1]["history"][0]["query"] == "How is my sleep?"
+    assert calls[-1]["life"]["recent_events"] == [] and calls[-1]["life"]["commitments"] == []
+    app.state.db_engine.dispose()
+
+
 def test_query_refines_typed_text_before_detecting_events():
     engine, calls = fake_query_engine()
     fixes = {"i got promoshun ill get xtra 50k evry month": "I got a promotion and get an extra 50k every month."}
@@ -375,10 +433,18 @@ def test_domain_chats_policies_dues_and_due_alerts():
     assert calls[-1]["life"]["dues"] == [] and off["domain"] == "health"
     ok = ask("I bought a car for 8 lakh, EMI 15000 for 5 years", domain="finance")
     assert [u["type"] for u in ok["updates"]] == ["loan"]
+    factors = ok["updates"][0]["factor_impacts"]
+    assert {factor["domain"] for factor in factors} == {"health", "finance", "insurance"}
+    dti = next(factor for factor in factors if factor["label"] == "Debt-to-income ratio")
+    assert dti["status"] == "changed" and dti["delta"] > 0
+    assert all(factor["status"] != "changed" for factor in factors if factor["domain"] == "health")
 
     # Non-health insurance is stored as a policy and creates a renewal due.
-    pol = ask("I took bike insurance for 2500 a year", domain="insurance")
+    pol = ask("I took bike insurance for 2500 a year, renewal date 2030-01-15", domain="insurance")
     assert pol["updates"][0]["type"] == "policy"
+    premium_factor = next(factor for factor in pol["updates"][0]["factor_impacts"]
+                          if factor["label"] == "Annual portfolio premiums")
+    assert premium_factor["status"] == "changed"
     policies = client.get("/inputs", params={"user_id": user}).json()["insurance_inputs"]["policies"]
     assert policies[0]["type"] == "vehicle" and policies[0]["premium"] == 2500
 
@@ -396,6 +462,76 @@ def test_domain_chats_policies_dues_and_due_alerts():
     health_threads = client.get("/chat-history", params={"user_id": user, "domain": "health"}).json()["threads"]
     main_threads = client.get("/chat-history", params={"user_id": user}).json()["threads"]
     assert [t["thread_id"] for t in health_threads] == ["health-t"] and main_threads == []
+    app.state.db_engine.dispose()
+
+
+def test_policy_renewal_alert_becomes_historical_when_new_date_is_unknown():
+    engine, _ = fake_query_engine()
+    app = create_app("sqlite://", health_twin_factory=FakeHealthTwin, query_engine=engine)
+    client = TestClient(app)
+    client.post("/onboard", json=valid_onboarding_payload())
+    user = "synthetic-user-001"
+    ask = lambda query: client.post("/query", json={"user_id": user, "query": query, "domain": "insurance"}).json()
+    assert ask("I took bike insurance for 2500 a year, renewal date 2020-01-15")["updates"]
+    alerts = client.get("/notifications", params={"user_id": user}).json()["notifications"]
+    expired = next(alert for alert in alerts if alert["type"] == "due_expired")
+    assert not expired.get("historical")
+    assert ask("I renewed my bike insurance")["updates"]
+    alerts = client.get("/notifications", params={"user_id": user}).json()["notifications"]
+    old = next(alert for alert in alerts if alert["id"] == expired["id"])
+    assert old["historical"] and old["read"]
+    assert "no longer current" in old["message"]
+    assert not any(due["kind"] == "renewal" for due in client.get("/dues", params={"user_id": user}).json()["dues"])
+    app.state.db_engine.dispose()
+
+
+def test_treatment_cost_prompt_only_for_treatment_questions():
+    from api import _build_query_result
+
+    state = {"routing": {"simulate": True}, "narration": "x",
+             "simulation_result": {"error": "Please include a specific treatment cost to run this simulation."}}
+    assert _build_query_result("I stopped eating ice cream daily.", state, [])["simulation"] is None
+    assert "error" in _build_query_result("Can I afford this surgery?", state, [])["simulation"]
+
+
+def test_only_actionable_advice_lines_are_marked_simulatable():
+    from api import _simulatable_advice
+
+    inputs = ({**valid_onboarding_payload()["health_inputs"], "smoke": 1},
+              valid_onboarding_payload()["finance_inputs"], valid_onboarding_payload()["insurance_inputs"])
+    result = {"narration": "**Verdict**\n\nYour plan:\n1. **Quit smoking** this month.\n"
+                           "2. See your cardiologist for a lipid profile.\n3. Add a critical illness rider."}
+    assert _simulatable_advice(result, inputs) == ["quit smoking this month.", "add a critical illness rider."]
+    assert _simulatable_advice(result, None) == []
+
+
+def test_simulate_advice_derives_changes_without_saving():
+    app = create_app("sqlite://", health_twin_factory=FakeHealthTwin)
+    client = TestClient(app)
+    client.post("/onboard", json=valid_onboarding_payload())
+    user = "synthetic-user-001"
+    snapshots = len(client.get("/history", params={"user_id": user}).json()["snapshots"])
+    body = client.post("/simulate-advice", json={"user_id": user, "advice": "Increase your sum insured to ₹10 lakh."}).json()
+    assert [(c["field"], c["target"]) for c in body["changes"]] == [("sum_insured", 1_000_000)]
+    assert body["after"]["insurance"]["insurance_adequacy_score"] >= body["before"]["insurance"]["insurance_adequacy_score"]
+    assert any(f["label"] == "Health cover" for f in body["factor_impacts"])
+    none = client.post("/simulate-advice", json={"user_id": user, "advice": "See your cardiologist this month."}).json()
+    assert none["changes"] == [] and none["factor_impacts"] == []
+    assert len(client.get("/history", params={"user_id": user}).json()["snapshots"]) == snapshots
+    app.state.db_engine.dispose()
+
+
+def test_greeting_gets_short_reply_without_twin_report():
+    engine, calls = fake_query_engine()
+    app = create_app("sqlite://", health_twin_factory=FakeHealthTwin, query_engine=engine)
+    client = TestClient(app)
+    client.post("/onboard", json=valid_onboarding_payload())
+    before = len(calls)
+    for text in ("hi", "Hello!", "thanks"):
+        body = client.post("/query", json={"user_id": "synthetic-user-001", "query": text, "domain": "health"}).json()
+        assert body["citations"] == [] and body["updates"] == []
+        assert "score" not in body["narration"].lower()
+    assert len(calls) == before
     app.state.db_engine.dispose()
 
 
@@ -545,4 +681,134 @@ def test_life_event_in_chat_updates_twin_logs_event_and_can_be_undone():
     client.post("/query", json={"user_id": user, "query": "I had a heart attack"})
     client.post("/onboard", json=valid_onboarding_payload())
     assert client.get("/inputs", params={"user_id": user}).json()["health_inputs"]["conditions"] == ["heart_attack"]
+    app.state.db_engine.dispose()
+
+
+def test_advisor_reassesses_health_and_insurance_updates():
+    class HabitSensitiveHealthTwin(ResponsiveHealthTwin):
+        def assess(self, inputs):
+            profile = super().assess(inputs)
+            profile["overall_health_score"] -= 10 * inputs["smoke"]
+            profile["conditions"] = inputs.get("conditions", [])
+            return profile
+
+    engine, _ = fake_query_engine()
+    app = create_app("sqlite://", health_twin_factory=HabitSensitiveHealthTwin, query_engine=engine)
+    client = TestClient(app)
+    user = {"user_id": "synthetic-user-001"}
+    client.post("/onboard", json=valid_onboarding_payload())
+    baseline = client.post("/assess", json=user).json()
+
+    smoke = client.post("/query", json={**user, "query": "I smoke"}).json()
+    assert smoke["updates"][0]["type"] == "habit"
+    assert {"label": "Health score", "before": 80, "after": 70} in smoke["updates"][0]["changes"]
+    assert client.get("/inputs", params=user).json()["health_inputs"]["smoke"] == 1
+    assert client.get("/history", params=user).json()["snapshots"][0]["health"]["overall_health_score"] == 70
+
+    bp = client.post("/query", json={**user, "query": "My blood pressure is now 150/95"}).json()
+    assert bp["updates"][0]["type"] == "bp"
+    inputs = client.get("/inputs", params=user).json()
+    assert (inputs["health_inputs"]["ap_hi"], inputs["health_inputs"]["ap_lo"]) == (150, 95)
+    latest = client.get("/history", params=user).json()["snapshots"][0]
+    assert latest["snapshot_id"] != baseline["snapshot_id"] and latest["health"]["hypertension_stage"] == "Stage 2"
+
+    cover = client.post("/query", json={**user, "query": "My health insurance cover is 10 lakh"}).json()
+    assert cover["updates"][0]["type"] == "cover"
+    assert client.get("/inputs", params=user).json()["insurance_inputs"]["sum_insured"] == 1_000_000
+    cover_snapshot = client.get("/history", params=user).json()["snapshots"][0]
+    assert cover_snapshot["snapshot_id"] == cover["updates"][0]["snapshot_id"]
+    assert cover_snapshot["insurance"]["coverage_adequacy_ratio"] > latest["insurance"]["coverage_adequacy_ratio"]
+
+    rider = client.post("/query", json={**user, "query": "I added a critical illness rider"}).json()
+    assert rider["updates"][0]["type"] == "rider"
+    assert "Critical Illness Rider" in client.get("/inputs", params=user).json()["insurance_inputs"]["existing_riders"]
+    rider_snapshot = client.get("/history", params=user).json()["snapshots"][0]
+    assert rider_snapshot["snapshot_id"] == rider["updates"][0]["snapshot_id"]
+    assert "Critical Illness Rider" in rider_snapshot["insurance"]["rider_analysis"]["existing"]
+
+    count = len(client.get("/history", params=user).json()["snapshots"])
+    for query in ("I smoke", "Should I quit smoking?", "My mother has diabetes", "I don't have diabetes"):
+        assert client.post("/query", json={**user, "query": query}).json()["updates"] == []
+    assert len(client.get("/history", params=user).json()["snapshots"]) == count
+    app.state.db_engine.dispose()
+
+
+def test_smoking_update_with_trained_cardiovascular_model():
+    import os
+    import pytest
+    from health_twin import CARDIO_MODEL_PATH, HealthTwin
+
+    if not os.path.exists(CARDIO_MODEL_PATH):
+        pytest.skip("Train the monotonic cardiovascular model to run this artifact test")
+    engine, _ = fake_query_engine()
+    app = create_app("sqlite://", health_twin_factory=HealthTwin, query_engine=engine)
+    client = TestClient(app)
+    user = {"user_id": "synthetic-user-001"}
+    client.post("/onboard", json=valid_onboarding_payload())
+    before = client.post("/assess", json=user).json()
+    result = client.post("/query", json={**user, "query": "I smoke"}).json()
+    after = client.get("/history", params=user).json()["snapshots"][0]
+    assert result["updates"] and after["snapshot_id"] == result["updates"][0]["snapshot_id"]
+    assert after["health"]["cardio_risk"]["probability"] >= before["health"]["cardio_risk"]["probability"]
+    impacts = {impact["label"]: impact for impact in result["updates"][0]["health_impacts"]}
+    assert set(impacts) == {
+        "Health score", "CVD model estimate", "Diabetes model estimate", "BMI", "Blood pressure",
+        "Cardiovascular model", "Glucose-based diabetes indicator", "Framingham estimate",
+    }
+    assert impacts["Cardiovascular model"]["weight_percent"] == 25
+    assert impacts["Cardiovascular model"]["after_weighted_points"] <= impacts["Cardiovascular model"]["before_weighted_points"]
+    assert impacts["Diabetes model estimate"]["after"] is None
+    assert "HbA1c" in impacts["Diabetes model estimate"]["note"]
+
+    drinking = client.post("/query", json={**user, "query": "I drink beer"}).json()
+    impacts = {impact["label"]: impact for impact in drinking["updates"][0]["health_impacts"]}
+    assert impacts["Diabetes model estimate"]["after"] is None
+    assert "not an input" in impacts["Diabetes model estimate"]["note"]
+    assert "CVD model estimate" in impacts
+
+    hba1c = client.post("/query", json={**user, "query": "My HbA1c is 6.1"}).json()
+    impacts = {impact["label"]: impact for impact in hba1c["updates"][0]["health_impacts"]}
+    assert impacts["Diabetes model estimate"]["after"] is not None
+    assert "CVD model estimate" not in impacts
+
+    illness = client.post("/query", json={**user, "query": "I had dengue for 5 days"}).json()
+    impacts = illness["updates"][0]["health_impacts"]
+    assert len(impacts) == 3 and all(item["after"] is None for item in impacts)
+    assert all("not calculated" in item["note"] for item in impacts)
+    app.state.db_engine.dispose()
+
+
+def test_diet_report_shows_five_unchanged_components_without_new_snapshot():
+    class ComponentHealthTwin(FakeHealthTwin):
+        def assess(self, inputs):
+            profile = super().assess(inputs)
+            profile["score_components"] = [
+                {"key": key, "label": label, "weight_percent": weight,
+                 "score": 80.0, "weighted_points": 80.0 * weight / 100}
+                for key, label, weight in (
+                    ("bmi", "BMI", 25), ("blood_pressure", "Blood pressure", 25),
+                    ("cardiovascular", "Cardiovascular model", 25),
+                    ("diabetes", "Glucose-based diabetes indicator", 15),
+                    ("framingham", "Framingham estimate", 10),
+                )
+            ]
+            return profile
+
+    engine, _ = fake_query_engine()
+    app = create_app("sqlite://", health_twin_factory=ComponentHealthTwin, query_engine=engine)
+    client = TestClient(app)
+    client.post("/onboard", json=valid_onboarding_payload())
+    user = {"user_id": "synthetic-user-001"}
+    before_count = len(client.get("/history", params=user).json()["snapshots"])
+    result = client.post("/query", json={**user, "domain": "health", "query": "I increased oily food consumption"}).json()
+    update = result["updates"][0]
+    assert update["log"] is True and update["snapshot_id"] is None
+    impacts = {impact["label"]: impact for impact in update["health_impacts"]}
+    assert len(impacts) == 6
+    assert impacts["Health score"]["before"] == impacts["Health score"]["after"] == 80
+    for label in ("BMI", "Blood pressure", "Cardiovascular model", "Glucose-based diabetes indicator", "Framingham estimate"):
+        assert impacts[label]["before"] == impacts[label]["after"] == 80
+        assert impacts[label]["before_weighted_points"] == impacts[label]["after_weighted_points"]
+        assert "measured value" in impacts[label]["note"]
+    assert len(client.get("/history", params=user).json()["snapshots"]) == before_count
     app.state.db_engine.dispose()

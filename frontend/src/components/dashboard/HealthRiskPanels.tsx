@@ -23,8 +23,10 @@ export function Vital({ label, value, tone }: { label: string; value: string; to
 export function CardioRiskPanel({ h, className }: { h: HealthProfile; className?: string }) {
   const framinghamTone: Tone = h.framingham_10yr_risk < 10 ? "good" : h.framingham_10yr_risk < 20 ? "warn" : "risk";
   return (
-    <Panel title="Cardiovascular risk" icon={HeartPulse} accent="text-health" subtitle="Random Forest probability" className={className}>
-      <RiskGauge probability={h.cardio_risk.probability} label={h.cardio_risk.label} />
+    <Panel title="Cardiovascular model estimate" icon={HeartPulse} accent="text-health" subtitle="Experimental disease classification; not a future-risk forecast" className={className}>
+      {h.cardio_model_version === "smoking_monotonic_v1" ? (
+        <RiskGauge probability={h.cardio_risk.probability} label={h.cardio_risk.label} />
+      ) : <ReassessPrompt />}
       <div className="mt-5 grid grid-cols-2 gap-2">
         <Vital label="BMI" value={`${h.bmi}`} tone={bmiTone(h.bmi)} />
         <Vital label="Blood pressure" value={h.hypertension_stage} tone={bpTone(h.hypertension_stage)} />
@@ -36,16 +38,16 @@ export function CardioRiskPanel({ h, className }: { h: HealthProfile; className?
 }
 
 export function DiabetesRiskPanel({ h, className }: { h: HealthProfile; className?: string }) {
-  const d = h.diabetes_risk;
+  const d = h.diabetes_risk?.hba1c_estimated ? null : h.diabetes_risk;
   const hba1cTone: Tone = !d ? "good" : d.hba1c >= 6.5 ? "risk" : d.hba1c >= 5.7 ? "warn" : "good";
   return (
-    <Panel title="Diabetes risk" icon={Droplets} accent="text-health" subtitle="Random Forest probability (diabetes dataset)" className={className}>
+    <Panel title="Diabetes model estimate" icon={Droplets} accent="text-health" subtitle="Experimental disease classification; not a diagnosis" className={className}>
       {d ? (
         <>
           {d.diagnosed ? (
             <div className="flex h-[150px] flex-col items-center justify-center text-center">
               <p className="font-display text-3xl font-semibold text-risk">Diagnosed</p>
-              <p className="mt-2 text-xs text-taupe">Recorded in your medical history; focus on control (HbA1c &lt; 7%).</p>
+              <p className="mt-2 text-xs text-taupe">Recorded in your medical history. Discuss individual targets with your clinician.</p>
             </div>
           ) : (
             <RiskGauge probability={d.probability} label={d.label} />
@@ -54,12 +56,12 @@ export function DiabetesRiskPanel({ h, className }: { h: HealthProfile; classNam
             <Vital label={d.hba1c_estimated ? "HbA1c (est.)" : "HbA1c"} value={`${d.hba1c}%`} tone={hba1cTone} />
             <Vital label="Glucose level" value={h.diabetes_indicator} tone={levelTone(h.diabetes_indicator)} />
           </div>
-          {d.hba1c_estimated && (
-            <p className="mt-3 text-[11px] text-taupe/70">
-              HbA1c estimated from fasting glucose. Tell the advisor your lab value (e.g. "my HbA1c is 6.1") for a precise risk.
-            </p>
-          )}
+          <p className="mt-3 text-[11px] text-taupe/70">This dataset model is not clinically validated and must not be used to diagnose diabetes.</p>
         </>
+      ) : h.diabetes_unavailable_reason === "missing_hba1c" || h.diabetes_risk?.hba1c_estimated ? (
+        <p className="text-sm text-taupe">A measured HbA1c is needed for the diabetes model. Tell the advisor your laboratory result, for example: "My HbA1c is 6.1".</p>
+      ) : h.diabetes_unavailable_reason === "model_unavailable" ? (
+        <p className="text-sm text-taupe">The diabetes model is unavailable on this installation.</p>
       ) : (
         <ReassessPrompt />
       )}
@@ -71,7 +73,7 @@ function ReassessPrompt() {
   const reassess = useReassess(useCurrentUser());
   return (
     <div className="flex flex-col items-start gap-3">
-      <p className="text-sm text-taupe">This snapshot was taken before the diabetes model was added.</p>
+      <p className="text-sm text-taupe">This snapshot predates the current models. Reassess to update it.</p>
       <button type="button" onClick={() => reassess.mutate()} disabled={reassess.isPending} className="btn-gold px-3 py-1.5 text-xs disabled:opacity-60">
         <RefreshCw className={`h-3.5 w-3.5 ${reassess.isPending ? "animate-spin" : ""}`} /> {reassess.isPending ? "Re-assessing…" : "Re-assess now"}
       </button>
@@ -81,7 +83,7 @@ function ReassessPrompt() {
 
 export function RiskExplainPanel({ h, className }: { h: HealthProfile; className?: string }) {
   const [model, setModel] = useState<"cardio" | "diabetes">("cardio");
-  const features = model === "cardio" ? h.shap_top_features : h.diabetes_shap ?? [];
+  const features = model === "cardio" ? (h.cardio_model_version === "smoking_monotonic_v1" ? h.shap_top_features : []) : h.diabetes_risk?.hba1c_estimated ? [] : h.diabetes_shap ?? [];
   return (
     <Panel
       title="Why these risks?"

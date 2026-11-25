@@ -1,9 +1,10 @@
 import { lazy, Suspense, type ComponentType, type ReactNode } from "react";
-import { Route, Routes } from "react-router-dom";
+import { Route, Routes, useLocation } from "react-router-dom";
 import { AppLayout } from "./components/AppLayout";
 import { CommandPalette } from "./components/CommandPalette";
 import { DemoTour } from "./components/DemoTour";
 import { GoldDust } from "./components/GoldDust";
+import { SplashIntro } from "./components/SplashIntro";
 import { Toaster } from "./components/Toaster";
 import { NotFound } from "./pages/NotFound";
 
@@ -32,6 +33,9 @@ function PageFallback() {
 const page = (node: ReactNode) => <Suspense fallback={<PageFallback />}>{node}</Suspense>;
 
 export default function App() {
+  const { pathname } = useLocation();
+  const isHome = pathname === "/";
+
   return (
     <>
       <GoldDust />
@@ -53,6 +57,7 @@ export default function App() {
       <CommandPalette />
       <DemoTour />
       <Toaster />
+      {isHome && <SplashIntro />}
     </>
   );
 }

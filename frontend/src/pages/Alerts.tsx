@@ -26,7 +26,7 @@ const FILTERS = ["all", "unread", "warning"] as const;
 function AlertCard({ n, onRead, index }: { n: Notification; onRead: () => void; index: number }) {
   const meta = TYPE_META[n.type] ?? { label: n.type, icon: Bell, accent: "text-gold" };
   const Icon = meta.icon;
-  const warning = n.severity === "warning";
+  const warning = n.severity === "warning" && !n.historical;
   return (
     <motion.li
       layout
@@ -51,7 +51,7 @@ function AlertCard({ n, onRead, index }: { n: Notification; onRead: () => void; 
         className={`glass w-full p-4 text-left transition-colors ${n.read ? "opacity-60" : "hover:border-gold/40"}`}
       >
         <div className="flex items-center gap-2 text-xs">
-          <span className={`font-semibold tracking-wide uppercase ${warning ? "text-warn" : "text-insurance"}`}>{meta.label}</span>
+          <span className={`font-semibold tracking-wide uppercase ${warning ? "text-warn" : "text-insurance"}`}>{n.historical ? "Earlier renewal alert" : meta.label}</span>
           {!n.read && <span className="h-1.5 w-1.5 rounded-full bg-gold" aria-label="unread" />}
           <span className="ml-auto text-taupe">
             {n.snapshot_id !== null ? `snapshot #${n.snapshot_id}` : n.domain ? (
@@ -86,7 +86,7 @@ export function Alerts() {
   }
 
   const items = (feed.data?.notifications ?? []).filter((n) =>
-    filter === "unread" ? !n.read : filter === "warning" ? n.severity === "warning" : true,
+    filter === "unread" ? !n.read : filter === "warning" ? n.severity === "warning" && !n.historical : true,
   );
 
   return (

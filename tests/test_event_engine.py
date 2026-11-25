@@ -78,6 +78,86 @@ def test_health_habits_and_measurements():
     assert (h["weight_kg"], h["smoke"], h["active"], h["ap_hi"], h["ap_lo"]) == (74, 0, 1, 120, 80)
 
 
+@pytest.mark.parametrize("text,field,value", [
+    ("I smoke", "smoke", 1),
+    ("I'm a smoker", "smoke", 1),
+    ("I don't smoke", "smoke", 0),
+    ("I drink alcohol", "alco", 1),
+    ("I never drink alcohol", "alco", 0),
+])
+def test_current_habit_statements(text, field, value):
+    health = {**HEALTH, field: 1 - value}
+    events = detect_events(text, health, FINANCE, INSURANCE, today=TODAY)
+    assert len(events) == 1
+    assert apply_ops(health, FINANCE, INSURANCE, events[0]["ops"])[0][field] == value
+
+
+@pytest.mark.parametrize("text", ["Do I smoke?", "Should I start smoking?", "My mother smokes", "I used to smoke"])
+def test_non_factual_or_other_person_smoking_does_not_update(text):
+    assert detect_events(text, {**HEALTH, "smoke": 0}, FINANCE, INSURANCE, today=TODAY) == []
+
+
+def test_denied_diagnosis_is_not_recorded():
+    assert detect("I don't have diabetes") == []
+
+
+def test_current_health_insurance_cover_statement():
+    [event] = detect("My health insurance cover is 10 lakh")
+    assert apply([event])[2]["sum_insured"] == 1_000_000
+
+
+def test_policy_requires_real_renewal_date_and_preserves_known_details():
+    [created] = detect("I took bike insurance for 2500 a year")
+    policy = created["ops"][0]["value"]
+    assert policy["renewal_date"] is None and policy["premium"] == 2500
+
+    insurance = {**INSURANCE, "policies": [{"type": "vehicle", "name": "Bike insurance", "cover": 100_000,
+                                               "premium": 2_500, "renewal_date": "2026-12-01"}]}
+    [renewed] = detect_events("I renewed my bike insurance", HEALTH, FINANCE, insurance, today=TODAY)
+    updated = apply_ops(HEALTH, FINANCE, insurance, renewed["ops"])[2]["policies"][0]
+    assert updated["cover"] == 100_000 and updated["premium"] == 2_500
+    assert updated["renewal_date"] is None
+
+    [dated] = detect_events("I renewed my bike insurance, renewal date 2027-12-01", HEALTH, FINANCE, insurance, today=TODAY)
+    assert dated["ops"][-1]["value"]["renewal_date"] == "2027-12-01"
+    assert dated["ops"][-1]["value"]["cover"] == 100_000
+    [invalid] = detect_events("I renewed my bike insurance, renewal date 2027-02-31", HEALTH, FINANCE, insurance, today=TODAY)
+    assert invalid["needs"] and invalid["ops"] == []
+
+
+def test_policy_monthly_premium_and_explicit_renewal_update():
+    [created] = detect("I took bike insurance with premium 500 per month")
+    assert created["ops"][0]["value"]["premium"] == 6_000
+    insurance = {**INSURANCE, "policies": [created["ops"][0]["value"]]}
+    [updated] = detect_events("My bike insurance renewal date is 2027-12-01", HEALTH, FINANCE, insurance, today=TODAY)
+    policy = apply_ops(HEALTH, FINANCE, insurance, updated["ops"])[2]["policies"][0]
+    assert policy["renewal_date"] == "2027-12-01" and policy["renewal_confirmed"] is True
+    assert policy["premium"] == 6_000
+    [yearly] = detect("I took bike insurance with premium 2500 a year, my rent is 500 per month")
+    assert yearly["ops"][0]["value"]["premium"] == 2_500
+
+
+def test_unconfirmed_policy_date_does_not_create_renewal_alert():
+    from event_engine import compute_dues
+
+    policy = {"type": "vehicle", "name": "Bike insurance", "cover": 0,
+              "premium": 2_500, "renewal_date": "2026-11-20"}
+    assert not any(due["kind"] == "renewal" for due in compute_dues([], {"policies": [policy]}, TODAY))
+    policy["renewal_confirmed"] = True
+    assert any(due["kind"] == "renewal" and due["status"] == "expired"
+               for due in compute_dues([], {"policies": [policy]}, TODAY))
+    policy["renewal_date"] = "2026-02-31"
+    assert not any(due["kind"] == "renewal" for due in compute_dues([], {"policies": [policy]}, TODAY))
+
+
+def test_diet_and_supplement_reports_are_logged_without_model_ops():
+    for statement in ("I started eating chocolates", "I increased oily food consumption",
+                      "I started taking vitamin D supplements", "I am taking vitamin D supplements"):
+        [event] = detect_events(statement, HEALTH, FINANCE, INSURANCE, today=TODAY)
+        assert event["type"] == "diet" and event["log"] is True
+        assert event["ops"] == [] and event["domains"] == ["health"]
+
+
 def test_insurance_rider_and_cover():
     events = detect("I added a critical illness rider and my sum insured is now 15 lakh")
     i = apply(events)[2]

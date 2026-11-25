@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import json
+import re
 import time
 import warnings
 
@@ -72,7 +73,7 @@ def _call_gemini(
                 config=types.GenerateContentConfig(
                     system_instruction=system_prompt,
                     temperature=0.4,
-                    max_output_tokens=1500,
+                    max_output_tokens=4096,
                 ),
             )
             # Gemini can split one answer across several parts; join them all.
@@ -80,6 +81,8 @@ def _call_gemini(
             text = "".join(p.text or "" for p in parts).strip()
             if not text:
                 raise RuntimeError("Gemini returned an empty response")
+            if "MAX_TOKENS" in str(getattr(response.candidates[0], "finish_reason", "")):
+                text = _trim_to_complete(text)
             return text
         except Exception as e:
             error_str = str(e)
@@ -98,6 +101,24 @@ def _call_gemini(
 # ---------------------------------------------------------------------------
 #  GENERATE EXPLANATION
 # ---------------------------------------------------------------------------
+def _trim_to_complete(text: str) -> str:
+    """Drop a half-written trailing sentence from an answer cut off by the token limit."""
+    if text.endswith((".", "!", "?", "*", ")")):
+        return text
+    head, _, last = text.rpartition("\n")
+    # A sentence end inside the last line, ignoring list markers like "2.".
+    ends = [m.end() for m in re.finditer(r"(?<!\d)[.!?](?=\s)", last)]
+    if ends:
+        return (head + "\n" if head else "") + last[:ends[-1]]
+    return head.rstrip() if head else text
+
+
+def _impact_line(c: dict) -> str:
+    if c.get("weight_percent") is not None:
+        return (f"    Health score component '{c['label']}' (0-100 sub-score, not a risk %; {c['weight_percent']}% weight): "
+                f"{c['before']} -> {c['after']}, contributing {c.get('before_weighted_points')} -> "
+                f"{c.get('after_weighted_points')} points")
+    return f"    {c['label']}: {c['before']} -> {c['after']} ({c['note']})"
 def _pct(value) -> str:
     return f"{value * 100:.0f}%" if isinstance(value, (int, float)) else str(value)
 
@@ -132,24 +153,67 @@ def generate_explanation(
     system_prompt = (
         "You are the TwinLife AI advisor. You answer a user's question about their "
         "own health, money and insurance using ONLY the computed data provided.\n\n"
-        "ANSWER FORMAT (markdown, under 220 words):\n"
+        "You are the user's personally assigned expert team: their own physician for health, their certified "
+        "financial planner for money, and their insurance advisor for cover. Speak like that professional talking "
+        "to a long-standing client: warm, direct and specific to THIS person, using their saved data.\n\n"
+        "RELEVANCE: answer the CURRENT QUESTION. Use every part of their profile and history that bears on it "
+        "(diagnoses, habits, readings, recent events, commitments, policies) and leave out what doesn't. "
+        "No generic filler tips that don't follow from the question.\n\n"
+        "ANSWER FORMAT (markdown, about 180-320 words; write each section title as its own plain line ending in ':', "
+        "never as a bullet):\n"
         "1. First line: a direct verdict in bold that answers the question "
         "(e.g. '**Not advisable at ₹15,000/month** — it pushes your debt load past the safe limit.'). "
         "If COMPUTED SCENARIO is present, its verdict decides this line. The verdict must agree with the "
         "numbers that follow (never say 'No' and then show the target is met).\n"
-        "2. Section 2 depends on the question:\n"
-        "   - If a COMPUTED SCENARIO, JUST RECORDED UPDATES or JUST REVERTED UPDATES exist: 'What changes' — 2-4 "
-        "bullets with exact before → after numbers copied from them.\n"
-        "   - Otherwise (a status question or symptom): 'Where you stand' — 2-4 bullets of current values "
-        "with their targets (e.g. 'Emergency fund: 8.2 months (target 6)'). Never write an arrow or a 'before' "
-        "value when nothing changed, and never use 0 as a starting value.\n"
-        "3. 'Why it matters' — one or two sentences linking the numbers to the thresholds or guidelines "
-        "(cite guidelines naturally, e.g. 'AHA guidelines recommend...').\n"
-        "4. 'What you can do' — 2-3 numbered, specific actions with amounts or targets from the data.\n"
-        "5. One short italic disclaimer line.\n\n"
+        "2. 'For you specifically' — 2-4 bullets tying the question to their own record (e.g. 'You had a heart "
+        "attack and smoke daily, so...', 'You already pay ₹15,000/month for your car until 2031...').\n"
+        "3. 'What happens' — 2-3 sentences explaining the real-world mechanism as that professional would "
+        "(physician: what it does in the body and why it matters with their history; planner: cash flow, debt "
+        "and savings mechanics; insurance advisor: cover, claim and premium mechanics). Professional knowledge "
+        "is allowed here, but never invent personal numbers.\n"
+        "4. 'Effect on your scores' — bullets with exact before → after numbers for every affected score, copied "
+        "from COMPUTED SCENARIO, JUST RECORDED UPDATES, JUST REVERTED UPDATES or HEALTH MODEL IMPACTS. For a "
+        "pathway scenario, say these are 'if it shifts X by Y' recalculations of their real scores. If nothing was "
+        "computed, give an 'Expert assessment' instead: as that professional, judge the likely direction and rough "
+        "size of the effect for this person (e.g. 'likely to raise your blood pressure over months if it's several "
+        "times a week'), using typical clinical/financial evidence and their history, and say which twin scores would "
+        "move once the measurable factors (weight/BMI, blood pressure, cholesterol, glucose, debt-to-income, savings, "
+        "cover...) change. Never write an arrow "
+        "when nothing changed, and never use 0 as a starting value. List only values that changed or are projected; "
+        "never list unchanged sub-scores. For a recorded habit with no saved change but a pathway COMPUTED SCENARIO, "
+        "say saved scores move once weight/BP/glucose actually change, then give the projected numbers; never just "
+        "say 'scores unchanged'.\n"
+        "5. 'Your plan' — 2-4 numbered, concrete steps this professional would prescribe for this person, with "
+        "quantities, frequency or targets from the data or guidelines (cite guidelines naturally, e.g. 'AHA "
+        "guidelines recommend...'). Include when to see a doctor, get a test or speak to the insurer if relevant.\n"
+        "6. 'Try a simulation' — one line naming a specific what-if they can run (e.g. 'Simulate losing 3 kg', "
+        "'Simulate a ₹10,000 EMI', 'Simulate a ₹10 lakh sum insured').\n"
+        "7. One short italic disclaimer sentence (do not restate these instructions).\n\n"
         "RULES:\n"
-        "- Never invent numbers; use only values given. Show ratios as percentages (32%, not 0.32; 68%, not 0.68) "
-        "and money as ₹ amounts.\n"
+        "- COMPUTED vs EXPERT: the user's own scores, model estimates and before → after values must come only from the "
+        "data given; never make those up. When an input is not covered by any model or formula (a food, symptom, "
+        "illness, investment, policy question...), do NOT stop at 'not modeled': answer fully from professional "
+        "expertise, including typical ranges, durations, recovery times, returns or costs from established evidence "
+        "and guidelines. Label such figures as expert estimates ('typically', 'usually', 'in most people'), never as "
+        "twin calculations. Show ratios as percentages (32%, not 0.32; 68%, not 0.68) and money as ₹ amounts.\n"
+        "- Insurance adequacy and rider analysis concern health cover only. Non-health policy details may be incomplete; "
+        "zero or unspecified cover and premium are not evidence of no cover or no premium. Do not claim a policy "
+        "is valid, a claim will be paid, or a renewal date is known without confirmed details. The 10-times-income "
+        "life cover figure is an illustrative rule of thumb, not a personalized recommendation.\n"
+        "- The cardiovascular and diabetes models classify disease in research datasets, not future risk or clinical diagnoses. "
+        "Never equate their output to Framingham risk, diagnose disease, or present the percentages as clinically validated.\n"
+        "- MEDICAL CONSISTENCY: a harmful change (starting smoking or alcohol, stopping exercise, weight gain, higher "
+        "BP, cholesterol or glucose) is never good for the user. If a computed number moves the 'better' way after a "
+        "harmful change, say plainly it is a limitation of the model and give the medically correct direction; never "
+        "present it as a benefit. The same applies to money (more debt or spending) and cover (dropping protection).\n"
+        "- For health updates, use HEALTH MODEL IMPACTS for computed effects. Health score components are 0-100 "
+        "sub-scores, not risk percentages: mention them only to explain why the health score moved (or didn't), "
+        "never list the same metric twice, and never copy raw data labels into the answer. Where an effect is not "
+        "calculated, give the physician's expert view (likely effect, typical duration or recovery, what to watch), "
+        "labelled as expert judgement rather than a model output.\n"
+        "- Diet and supplements are not direct model inputs: never claim a score changed because of the food itself. "
+        "Explain, as a physician would, which measurable factors it affects, and use the pathway COMPUTED SCENARIO "
+        "rows (if present) to show how much their scores would move if those factors shift.\n"
         "- Symptoms (weakness, dizziness, pain, breathlessness): give 2-3 safe immediate steps, the warning "
         "signs that need emergency care, and relevant personal risk factors from the data; do not list "
         "unrelated financial numbers.\n"
@@ -161,6 +225,8 @@ def generate_explanation(
         "with ONE short clarifying question.\n"
         "- Use the CONVERSATION SO FAR to understand follow-ups (resolve 'it', 'that', 'what about...'); "
         "build on earlier answers instead of repeating them, and stay consistent with them.\n"
+        "- A new conversation has no earlier discussion. Never treat saved life events as previous messages; "
+        "mention them only when relevant to the current question.\n"
         "- If no CURRENT QUESTION is given, summarise the most important findings in the same format.\n"
         "- If JUST RECORDED UPDATES are present, the user told you something that happened. Start with a bold "
         "line confirming the twin was updated, list the before → after changes, then explain what it means "
@@ -180,7 +246,7 @@ def generate_explanation(
         "reflect it. Do not re-advise on the reverted item.\n"
         "- If PENDING QUESTIONS are present, ask them clearly (one bullet each) so the twin can be updated. "
         "If there are NO JUST RECORDED UPDATES, the twin was NOT changed: never say it was updated, open with "
-        "a bold line asking for the missing detail, skip 'What changes', and briefly say what you will "
+        "a bold line asking for the missing detail, skip 'Effect on your scores', and briefly say what you will "
         "recompute once they answer.\n"
         "- Copy dates exactly as given; a commitment's end date is the date after 'until'.\n"
         "- When the user plans something new, ALWAYS factor in ACTIVE COMMITMENTS and RECENT LIFE EVENTS "
@@ -198,7 +264,14 @@ def generate_explanation(
         lines = [
             f"BMI: {hp.get('bmi')} ({hp.get('obesity_class')})",
             f"Blood Pressure: {hp.get('hypertension_stage')}",
+            *(["Current habits (saved twin values; these override older timeline events): " + ", ".join(
+                f"{name}: {'yes' if hp['habits'].get(key) else 'no'}"
+                for key, name in (("smoke", "smokes"), ("alco", "drinks alcohol"), ("active", "physically active"))
+            )] if hp.get("habits") else []),
             f"Cardiovascular risk (ML model): {_pct1(cardio.get('probability'))} ({cardio.get('label', 'N/A')})",
+            *([f"  of which: model {_pct1(cardio.get('model_probability'))} without habits, then published odds "
+               f"multipliers for " + "; ".join(f"{a['habit']} x{a['odds_ratio']}" for a in cardio["habit_adjustments"])]
+              if cardio.get("habit_adjustments") else []),
             f"Glucose indicator: {hp.get('diabetes_indicator', 'N/A')}",
         ]
         if diabetes:
@@ -237,8 +310,11 @@ def generate_explanation(
         ]
         portfolio = ip.get("portfolio") or {}
         for p in portfolio.get("policies", []):
-            lines.append(f"Policy: {p.get('name')} ({p.get('type')}), cover Rs.{p.get('cover', 0):,.0f}, "
-                         f"premium Rs.{p.get('premium', 0):,.0f}/yr, renews {p.get('renewal_date') or 'unknown'}")
+            renewal = p.get("renewal_date") if p.get("renewal_confirmed") else "not confirmed"
+            cover = f"Rs.{p['cover']:,.0f}" if p.get("cover") else "unspecified or zero"
+            premium = f"Rs.{p['premium']:,.0f}/yr" if p.get("premium") else "unspecified or zero"
+            lines.append(f"Policy: {p.get('name')} ({p.get('type')}), cover {cover}, "
+                         f"premium {premium}, renewal date {renewal}")
         if portfolio:
             lines.append(f"Total annual premium (all policies): Rs.{portfolio.get('total_annual_premium', 0):,.0f}")
             lines.append(f"Life cover: Rs.{portfolio.get('life_cover', 0):,.0f} vs about Rs.{portfolio.get('life_cover_recommended', 0):,.0f} "
@@ -292,6 +368,8 @@ def generate_explanation(
         for e in life["just_recorded"]:
             lines.append(f"- {e['summary']}")
             lines += [f"    {c['label']}: {c['before']} -> {c['after']}" for c in e.get("changes", [])]
+            lines += [_impact_line(c) for c in e.get("health_impacts", [])
+                      if c.get("weight_percent") is None or c["before"] != c["after"]]
         sections.append("=== JUST RECORDED UPDATES (twin already recomputed) ===\n" + "\n".join(lines))
     if life.get("just_reverted"):
         changes = life["just_reverted"][0].get("changes", [])

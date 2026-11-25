@@ -30,8 +30,9 @@ export function InsuranceTwin() {
                 <ScoreRing value={i.insurance_adequacy_score} label="Adequacy" color="#C9CED6" />
                 {portfolio && (
                   <p className="text-center text-xs text-taupe">
-                    Total premiums {inr(portfolio.total_annual_premium)}/yr across {policies.length + (portfolio.health_cover > 0 ? 1 : 0)} polic
+                    Recorded premiums {inr(portfolio.total_annual_premium)}/yr across {policies.length + (portfolio.health_cover > 0 ? 1 : 0)} polic
                     {policies.length + (portfolio.health_cover > 0 ? 1 : 0) === 1 ? "y" : "ies"}
+                    . Total may be incomplete where premiums are not recorded.
                   </p>
                 )}
               </div>
@@ -48,15 +49,16 @@ export function InsuranceTwin() {
                 )}
                 {policies.map((p, idx) => {
                   const Icon = policyIcon(p);
-                  const expired = p.renewal_date !== null && p.renewal_date < today;
+                  const expired = Boolean(p.renewal_confirmed && p.renewal_date && p.renewal_date < today);
                   return (
-                    <li key={`${p.name}-${idx}`} className="flex items-center gap-3 rounded-xl border border-gold/10 bg-ink/40 px-3 py-2.5 text-sm">
+                    <li key={`${p.name}-${idx}`} className="flex flex-wrap items-center gap-3 rounded-xl border border-gold/10 bg-ink/40 px-3 py-2.5 text-sm">
                       <Icon className="h-4 w-4 text-insurance" />
                       <span className="flex-1 text-ivory">{p.name}</span>
                       <span className="font-mono text-xs text-taupe">
-                        {p.cover ? `cover ${inr(p.cover)} · ` : ""}
-                        {p.premium ? `${inr(p.premium)}/yr · ` : ""}
-                        <span className={expired ? "text-risk" : ""}>{expired ? "expired " : "renews "}{p.renewal_date ?? "?"}</span>
+                        {p.cover ? `cover ${inr(p.cover)}` : "cover unspecified or ₹0"} · {p.premium ? `${inr(p.premium)}/yr` : "premium unspecified or ₹0"} · {" "}
+                        <span className={expired ? "text-risk" : ""}>
+                          {!p.renewal_date ? "renewal date unknown" : !p.renewal_confirmed ? `date unverified: ${p.renewal_date}` : `${expired ? "expired" : "renews"} ${p.renewal_date}`}
+                        </span>
                       </span>
                     </li>
                   );
@@ -67,9 +69,10 @@ export function InsuranceTwin() {
               </ul>
               {portfolio && portfolio.life_cover_gap > 0 && (
                 <p className="mt-3 rounded-xl border border-warn/30 bg-warn/5 px-3 py-2 text-xs text-warn">
-                  Life cover {inr(portfolio.life_cover)} vs ~{inr(portfolio.life_cover_recommended)} suggested (10× annual income).
+                  Recorded life cover {inr(portfolio.life_cover)} vs an illustrative {inr(portfolio.life_cover_recommended)} (10× annual income). Actual needs depend on your circumstances.
                 </p>
               )}
+              <p className="mt-3 text-xs text-taupe">Policy terms, exclusions, claim eligibility and coverage for non-health policies are not assessed. Check with your insurer.</p>
             </Panel>
 
             <DuesPanel userId={userId} domain="insurance" title="Renewals & gaps" className="lg:col-span-2" />

@@ -3,6 +3,7 @@ import { Suspense, useEffect, useMemo, useRef, useState, type MutableRefObject, 
 import { createPortal } from "react-dom";
 import * as THREE from "three";
 import { prefersReducedMotion, useFullMotion } from "../lib/motion";
+import { onSplashDone } from "../lib/splash";
 
 // Low-poly head generated offline by scripts/lowpoly-face.mjs from the CC BY 3.0 Lee Perry-Smith scan.
 const MODEL_URL = "/models/face-lowpoly.json";
@@ -269,12 +270,20 @@ function riskTint(risk: number): THREE.Color {
   return new THREE.Color("#FFFFFF").lerp(new THREE.Color(risk > 0.5 ? "#F5E6B8" : "#FFFFFF"), Math.min(0.3, Math.abs(risk - 0.5) * 0.6));
 }
 
-type SceneProps = { anchor: RefObject<HTMLDivElement | null>; risk: number; animate: boolean; replay: MutableRefObject<number> };
+type SceneProps = {
+  anchor: RefObject<HTMLDivElement | null>; risk: number; animate: boolean; replay: MutableRefObject<number>; introRunning: boolean;
+};
 
-function HeadScene({ anchor, risk, animate, replay }: SceneProps) {
+function HeadScene({ anchor, risk, animate, replay, introRunning }: SceneProps) {
   const json = useLoader(THREE.FileLoader, MODEL_URL) as unknown as string;
   const { camera, invalidate } = useThree();
   const data = useMemo(() => buildHead(JSON.parse(json) as LowPoly), [json]);
+  // Switching to on-demand rendering when the intro ends needs one fresh frame of the finished face.
+  useEffect(() => {
+    invalidate();
+    const settle = window.setTimeout(invalidate, 100);
+    return () => window.clearTimeout(settle);
+  }, [introRunning, invalidate]);
 
   const uniforms = useMemo(
     () => ({
@@ -337,11 +346,13 @@ function HeadScene({ anchor, risk, animate, replay }: SceneProps) {
 
   useFrame((state) => {
     const t = state.clock.elapsedTime;
+    // Wall-clock timing: the R3F clock resets whenever the frameloop mode changes.
+    const now = performance.now() / 1000;
     if (start.current === null || seenReplay.current !== replay.current) {
-      start.current = t;
+      start.current = now;
       seenReplay.current = replay.current;
     }
-    const progress = animate ? Math.min(1, (t - start.current) / INTRO_SECONDS) : 1;
+    const progress = Math.min(1, Math.max(0, (now - start.current) / INTRO_SECONDS));
     uniforms.uTime.value = t;
     uniforms.uProgress.value = progress;
     uniforms.uSolid.value = THREE.MathUtils.smoothstep(progress, 0.62, 0.9);
@@ -418,6 +429,20 @@ export default function HoloFace({ risk = 0.2 }: { risk?: number }) {
   const replay = useRef(0);
   const visible = useOnScreen(anchor);
   const animate = !prefersReducedMotion();
+  // The formation intro always plays; only the ongoing sway honours reduced motion.
+  const [introUntil, setIntroUntil] = useState(() => Date.now() + (INTRO_SECONDS + 1) * 1000);
+  const [, tick] = useState(0);
+  const replayIntro = () => {
+    replay.current++;
+    setIntroUntil(Date.now() + (INTRO_SECONDS + 1) * 1000);
+  };
+  // The intro may already have run hidden behind the startup splash; form the face again as it fades.
+  useEffect(() => onSplashDone(replayIntro), []);
+  useEffect(() => {
+    const timer = window.setTimeout(() => tick((n) => n + 1), Math.max(0, introUntil - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [introUntil]);
+  const introRunning = Date.now() < introUntil;
 
   return (
     <div
@@ -426,7 +451,7 @@ export default function HoloFace({ risk = 0.2 }: { risk?: number }) {
       role="img"
       aria-label="Holographic digital twin face"
       title="Click to re-form the twin"
-      onClick={() => replay.current++}
+      onClick={replayIntro}
     >
       {createPortal(
         // Portaled to <body> so ancestor transforms (page animations) can't break the fixed full-screen canvas.
@@ -435,10 +460,10 @@ export default function HoloFace({ risk = 0.2 }: { risk?: number }) {
             dpr={[1, 2]}
             camera={{ position: [0, 0, CAMERA_Z], fov: FOV }}
             gl={{ antialias: true, alpha: true, powerPreference: "high-performance" }}
-            frameloop={animate && visible ? "always" : "demand"}
+            frameloop={(animate || introRunning) && visible ? "always" : "demand"}
           >
             <Suspense fallback={null}>
-              <HeadScene anchor={anchor} risk={risk} animate={animate} replay={replay} />
+              <HeadScene anchor={anchor} risk={risk} animate={animate} replay={replay} introRunning={introRunning} />
             </Suspense>
           </Canvas>
         </div>,

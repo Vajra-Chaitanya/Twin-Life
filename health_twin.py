@@ -37,7 +37,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 #  PATHS
 # ---------------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CARDIO_MODEL_PATH = os.path.join(BASE_DIR, "models", "cardio_model.pkl")
+CARDIO_MODEL_PATH = os.path.join(BASE_DIR, "models", "cardio_model_clinical.pkl")
 DIABETES_MODEL_PATH = os.path.join(BASE_DIR, "models", "diabetes_model.pkl")
 DIABETES_COLS_PATH = os.path.join(BASE_DIR, "models", "diabetes_feature_cols.pkl")
 # Conditions that the diabetes dataset records as heart disease.
@@ -62,6 +62,14 @@ CARDIO_FEATURES = [
     "smoke", "alco", "active",
 ]
 
+# The training data is self-reported and nearly uninformative for habits (model odds ratio ~1.0), so habit
+# effects come from published cohort evidence instead, applied as odds multipliers.
+HABIT_ODDS_RATIOS = {
+    "smoke": (2.0, "current smoking (INTERHEART / AHA: roughly doubles CVD risk)"),
+    "alco": (1.25, "regular alcohol use (Lancet 2018 pooled cohorts: higher stroke, heart failure and hypertension risk)"),
+    "inactive": (1.3, "physical inactivity (WHO: 20-30% higher CVD risk)"),
+}
+
 
 class HealthTwin:
     """Digital twin for health assessment.
@@ -78,6 +86,8 @@ class HealthTwin:
 
     def __init__(self) -> None:
         """Load the pre-trained cardiovascular model from disk."""
+        if not os.path.exists(CARDIO_MODEL_PATH):
+            raise FileNotFoundError("Cardiovascular model missing; run python training/train_cardio_model.py")
         self.cardio_model = joblib.load(CARDIO_MODEL_PATH)
         self.diabetes_model = None
         self.diabetes_cols: list[str] = []
@@ -151,6 +161,9 @@ class HealthTwin:
         overall = self._compute_overall_score(
             bmi_val, bp, cardio_prob, diab_indicator, framingham,
         )
+        score_components = self._score_components(
+            bmi_val, bp, cardio_prob, diab_indicator, framingham,
+        )
         # Diagnosed conditions are not model features; apply a documented, capped penalty instead.
         penalty = min(35, sum(CONDITION_PENALTIES.get(c, 10) for c in conditions))
         overall = max(0, overall - penalty)
@@ -162,15 +175,23 @@ class HealthTwin:
             "cardio_risk": {
                 "probability": round(cardio_prob, 3),
                 "label": cardio_label,
+                **self.latest_cardio_detail,
             },
+            "cardio_model_version": "clinical_monotonic_v2",
             "diabetes_indicator": diab_indicator,
             "diabetes_risk": diabetes_risk,
+            "diabetes_unavailable_reason": (
+                "model_unavailable" if self.diabetes_model is None else
+                "missing_hba1c" if inputs.get("hba1c") is None else None
+            ),
             "diabetes_shap": diabetes_shap,
             "framingham_10yr_risk": round(framingham, 1),
             "overall_health_score": overall,
+            "score_components": score_components,
             "shap_top_features": cardio_shap,
             "conditions": conditions,
             "condition_penalty": penalty,
+            "habits": {key: inputs.get(key) for key in ("smoke", "alco", "active")},
         }
         self.latest_inputs = dict(inputs)
         self.latest_profile = profile
@@ -209,12 +230,22 @@ class HealthTwin:
             "ap_lo":       inputs["ap_lo"],
             "cholesterol": inputs["cholesterol"],
             "gluc":        inputs["gluc"],
-            "smoke":       inputs["smoke"],
-            "alco":        inputs["alco"],
-            "active":      inputs["active"],
+            "smoke":       0,
+            "alco":        0,
+            "active":      1,
         }])[CARDIO_FEATURES]
 
-        prob = float(self.cardio_model.predict_proba(row)[0, 1])
+        base = float(self.cardio_model.predict_proba(row)[0, 1])
+        applied = [key for key, on in (("smoke", inputs["smoke"]), ("alco", inputs["alco"]),
+                                       ("inactive", not inputs["active"])) if on]
+        odds = base / max(1e-6, 1 - base)
+        for key in applied:
+            odds *= HABIT_ODDS_RATIOS[key][0]
+        prob = odds / (1 + odds)
+        self.latest_cardio_detail = {
+            "model_probability": round(base, 3),
+            "habit_adjustments": [{"habit": HABIT_ODDS_RATIOS[k][1], "odds_ratio": HABIT_ODDS_RATIOS[k][0]} for k in applied],
+        }
 
         # SHAP
         shap_features = []
@@ -226,11 +257,18 @@ class HealthTwin:
                 vals = sv[1][0]  # class-1 shap values
             else:
                 vals = sv[0] if sv.ndim == 1 else sv[0, :, 1] if sv.ndim == 3 else sv[0]
-            for feat, val in sorted(
-                zip(CARDIO_FEATURES, vals), key=lambda x: abs(x[1]), reverse=True,
-            )[:5]:
+            contributions = [(feat, float(val)) for feat, val in zip(CARDIO_FEATURES, vals)
+                             if feat not in ("smoke", "alco", "active")]
+            running = base
+            for key in applied:
+                odds_before = running / max(1e-6, 1 - running)
+                odds_after = odds_before * HABIT_ODDS_RATIOS[key][0]
+                after = odds_after / (1 + odds_after)
+                contributions.append(({"inactive": "active"}.get(key, key), after - running))
+                running = after
+            for feat, val in sorted(contributions, key=lambda x: abs(x[1]), reverse=True)[:5]:
                 shap_features.append({
-                    "feature": feat, "impact": round(float(val), 4), "model": "cardio",
+                    "feature": feat, "impact": round(val, 4), "model": "cardio",
                 })
         return prob, shap_features
 
@@ -242,16 +280,12 @@ class HealthTwin:
     ) -> tuple[dict | None, list[dict]]:
         """Diabetes probability from the trained model, with grouped SHAP factors.
 
-        HbA1c is rarely known, so when it is missing it is estimated from fasting glucose with the
-        ADA eAG relation (A1c = (glucose + 46.7) / 28.7) and flagged as estimated.
+        A measured HbA1c is required; fasting glucose is not an estimated average glucose measurement.
         """
-        if self.diabetes_model is None:
+        if self.diabetes_model is None or inputs.get("hba1c") is None:
             return None, []
         glucose = float(inputs.get("blood_glucose_level") or 90)
         hba1c = inputs.get("hba1c")
-        estimated = hba1c is None
-        if estimated:
-            hba1c = round((glucose + 46.7) / 28.7, 1)
         gender = str(inputs.get("gender", "")).lower()
         values = {
             "age": inputs["age"],
@@ -264,7 +298,7 @@ class HealthTwin:
             "gender_Male": int(gender == "male"),
             "gender_Other": int(gender not in ("female", "male")),
             "smoking_current": int(bool(inputs.get("smoke"))),
-            "smoking_never": int(not inputs.get("smoke")),
+            "smoking_No Info": int(not inputs.get("smoke")),
         }
         row = pd.DataFrame([{col: values.get(col, 0) for col in self.diabetes_cols}])
         prob = float(self.diabetes_model.predict_proba(row)[0, 1])
@@ -272,7 +306,7 @@ class HealthTwin:
             "probability": round(prob, 3),
             "label": self._risk_label(prob),
             "hba1c": float(hba1c),
-            "hba1c_estimated": estimated,
+            "hba1c_estimated": False,
             "diagnosed": "diabetes" in conditions,
         }
 
@@ -334,7 +368,21 @@ class HealthTwin:
           15%  Diabetes indicator -- deterministic tier score
           10%  Framingham     -- (1 - clamp(framingham/50, 0, 1)) * 100
         """
-        # BMI: ideal=22, penalty grows with distance
+        components = HealthTwin._score_components(
+            bmi_val, bp_stage_str, cardio_prob, diabetes_indicator_value, framingham,
+        )
+        weighted = sum(component["weighted_points"] for component in components)
+        return int(round(max(0, min(100, weighted))))
+
+    @staticmethod
+    def _score_components(
+        bmi_val: float,
+        bp_stage_str: str,
+        cardio_prob: float,
+        diabetes_indicator_value: str,
+        framingham: float,
+    ) -> list[dict]:
+        # BMI: ideal=22, penalty grows with distance.
         bmi_dist = abs(bmi_val - 22.0)
         bmi_score = max(0.0, 100.0 - bmi_dist * 5.0)  # 20 units away = 0
 
@@ -347,14 +395,17 @@ class HealthTwin:
         )
         fram_score = (1.0 - min(framingham / 50.0, 1.0)) * 100.0
 
-        weighted = (
-            0.25 * bmi_score
-            + 0.25 * bp_score
-            + 0.25 * cardio_score
-            + 0.15 * diabetes_score
-            + 0.10 * fram_score
-        )
-        return int(round(max(0, min(100, weighted))))
+        return [
+            {"key": key, "label": label, "weight_percent": weight,
+             "score": score, "weighted_points": score * coefficient}
+            for key, label, weight, coefficient, score in (
+                ("bmi", "BMI", 25, 0.25, bmi_score),
+                ("blood_pressure", "Blood pressure", 25, 0.25, bp_score),
+                ("cardiovascular", "Cardiovascular model", 25, 0.25, cardio_score),
+                ("diabetes", "Glucose-based diabetes indicator", 15, 0.15, diabetes_score),
+                ("framingham", "Framingham estimate", 10, 0.10, fram_score),
+            )
+        ]
 
 # ======================================================================
 #  STANDALONE VERIFICATION (python health_twin.py)

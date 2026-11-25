@@ -4,7 +4,7 @@ Train a RandomForestClassifier on the Kaggle Cardiovascular Disease dataset.
 
 Dataset : data/cardio_train.csv  (semicolon-separated, 70,000 rows)
 Target  : cardio (0 = no CVD, 1 = CVD)
-Output  : models/cardio_model.pkl
+Output  : models/cardio_model_clinical.pkl (risk factors constrained to their clinical direction)
 
 Preprocessing steps (per spec):
   1. Convert age from days → years  (age_years = age // 365)
@@ -23,6 +23,7 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
     accuracy_score,
+    brier_score_loss,
     classification_report,
     f1_score,
     roc_auc_score,
@@ -39,7 +40,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_PATH = os.path.join(PROJECT_ROOT, "data", "cardio_train.csv")
 MODEL_DIR = os.path.join(PROJECT_ROOT, "models")
-MODEL_PATH = os.path.join(MODEL_DIR, "cardio_model.pkl")
+MODEL_PATH = os.path.join(MODEL_DIR, "cardio_model_clinical.pkl")
 
 FEATURES = [
     "age_years", "gender", "bmi",
@@ -47,6 +48,10 @@ FEATURES = [
     "cholesterol", "gluc",
     "smoke", "alco", "active",
 ]
+# Clinically established direction of each factor on CVD risk (+1 raises, -1 lowers, 0 unconstrained).
+# Without this the dataset's confounding makes e.g. alcohol look protective.
+MONOTONIC = {"age_years": 1, "gender": 0, "bmi": 1, "ap_hi": 1, "ap_lo": 1,
+             "cholesterol": 1, "gluc": 1, "smoke": 1, "alco": 1, "active": -1}
 TARGET = "cardio"
 
 RANDOM_STATE = 42
@@ -124,6 +129,7 @@ def train_model(df: pd.DataFrame) -> None:
         min_samples_leaf=20,
         random_state=RANDOM_STATE,
         n_jobs=-1,
+        monotonic_cst=[MONOTONIC[feature] for feature in FEATURES],
     )
     print("\nTraining RandomForestClassifier …")
     clf.fit(X_train, y_train)
@@ -143,6 +149,21 @@ def train_model(df: pd.DataFrame) -> None:
     print(f"  Accuracy : {acc:.4f}  ({acc*100:.1f}%)")
     print(f"  F1-score : {f1:.4f}  ({f1*100:.1f}%)")
     print(f"  ROC-AUC  : {auc:.4f}  ({auc*100:.1f}%)")
+    print(f"  Brier score: {brier_score_loss(y_test, y_prob):.4f}")
+    base = clf.predict_proba(X_test)[:, 1]
+    for feature, step in (("smoke", 1), ("alco", 1), ("active", -1), ("bmi", 3), ("ap_hi", 10),
+                          ("ap_lo", 5), ("cholesterol", 1), ("gluc", 1), ("age_years", 5)):
+        worse = X_test.copy()
+        if feature in ("smoke", "alco"):
+            worse[feature] = 1
+        elif feature == "active":
+            worse[feature] = 0
+        elif feature in ("cholesterol", "gluc"):
+            worse[feature] = np.minimum(3, worse[feature] + step)
+        else:
+            worse[feature] = worse[feature] + step
+        violations = np.count_nonzero(clf.predict_proba(worse)[:, 1] + 1e-12 < base)
+        print(f"  {feature:12s} direction violations: {violations}/{len(X_test)}")
     print()
     print(classification_report(y_test, y_pred, target_names=["No CVD", "CVD"]))
 

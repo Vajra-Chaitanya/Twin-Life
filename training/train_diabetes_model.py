@@ -4,16 +4,17 @@ Train a RandomForestClassifier on the diabetes prediction dataset.
 
 Dataset : data/diabetes_prediction_dataset.csv  (comma-separated, 100,000 rows)
 Target  : diabetes (0/1, ~8.5% positive — imbalanced)
-Output  : models/diabetes_model.pkl
+Output  : models/diabetes_model_unweighted.pkl (or diabetes_model.pkl with --balanced)
 
 Preprocessing steps (per spec):
   1. Drop exact duplicate rows (~3,854) BEFORE train/test split
   2. One-hot encode 'gender' (Female / Male / Other — 3 categories)
   3. One-hot encode 'smoking_history' (6 categories, 'No Info' kept as-is)
   4. Age is already in years — no conversion needed
-  5. Use class_weight='balanced' to handle 8.5% minority class
+    5. Optionally use class_weight='balanced' for the active model
 """
 
+import argparse
 import os
 import warnings
 
@@ -23,6 +24,8 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
     accuracy_score,
+    average_precision_score,
+    brier_score_loss,
     classification_report,
     f1_score,
     roc_auc_score,
@@ -39,7 +42,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_PATH = os.path.join(PROJECT_ROOT, "data", "diabetes_prediction_dataset.csv")
 MODEL_DIR = os.path.join(PROJECT_ROOT, "models")
-MODEL_PATH = os.path.join(MODEL_DIR, "diabetes_model.pkl")
+MODEL_PATH = os.path.join(MODEL_DIR, "diabetes_model_unweighted.pkl")
 
 TARGET = "diabetes"
 RANDOM_STATE = 42
@@ -96,8 +99,8 @@ def load_and_preprocess(path: str) -> tuple[pd.DataFrame, list[str]]:
     return df, feature_cols
 
 
-def train_model(df: pd.DataFrame, feature_cols: list[str]) -> None:
-    """Train a balanced RandomForest, evaluate, and save the model."""
+def train_model(df: pd.DataFrame, feature_cols: list[str], balanced: bool = False) -> None:
+    """Train and evaluate a RandomForest; save the candidate separately by default."""
 
     X = df[feature_cols]
     y = df[TARGET]
@@ -109,16 +112,15 @@ def train_model(df: pd.DataFrame, feature_cols: list[str]) -> None:
     print(f"\nTrain set: {len(X_train):,} | Test set: {len(X_test):,}")
     print(f"Positive-class rate  train={y_train.mean():.3f}  test={y_test.mean():.3f}")
 
-    # Build model per spec — class_weight='balanced' for imbalanced target
     clf = RandomForestClassifier(
         n_estimators=200,
         max_depth=12,
         min_samples_leaf=10,
-        class_weight="balanced",
+        class_weight="balanced" if balanced else None,
         random_state=RANDOM_STATE,
         n_jobs=-1,
     )
-    print("\nTraining RandomForestClassifier (class_weight='balanced') …")
+    print(f"\nTraining RandomForestClassifier (balanced={balanced}) …")
     clf.fit(X_train, y_train)
 
     # Predict
@@ -136,31 +138,22 @@ def train_model(df: pd.DataFrame, feature_cols: list[str]) -> None:
     print(f"  Accuracy : {acc:.4f}  ({acc*100:.1f}%)")
     print(f"  F1-score : {f1:.4f}  ({f1*100:.1f}%)")
     print(f"  ROC-AUC  : {auc:.4f}  ({auc*100:.1f}%)")
+    print(f"  PR-AUC   : {average_precision_score(y_test, y_prob):.4f}")
+    print(f"  Brier score: {brier_score_loss(y_test, y_prob):.4f}")
     print()
     print(classification_report(
         y_test, y_pred,
         target_names=["No Diabetes", "Diabetes"],
     ))
 
-    # Sanity-check against known benchmarks
-    # Note: F1/accuracy gap is expected and intentional with balanced weights
-    print("-" * 50)
-    print("Benchmark check (expected: acc~90.4%, F1~62.3%, AUC~97.5%):")
-    for name, val, expected in [("Accuracy", acc, 0.904),
-                                 ("F1",       f1,  0.623),
-                                 ("ROC-AUC",  auc, 0.975)]:
-        delta = abs(val - expected) * 100
-        status = "[OK]" if delta < 3.0 else "[CHECK]"
-        print(f"  {name:10s}: {val*100:.1f}% (expected ~{expected*100:.1f}%)  "
-              f"D={delta:.1f}pp  {status}")
-
     # Save model
     os.makedirs(MODEL_DIR, exist_ok=True)
-    joblib.dump(clf, MODEL_PATH)
-    print(f"\nModel saved to {MODEL_PATH}")
+    model_path = os.path.join(MODEL_DIR, "diabetes_model.pkl") if balanced else MODEL_PATH
+    joblib.dump(clf, model_path)
+    print(f"\nModel saved to {model_path}")
 
     # Also save the feature column order — needed at inference time
-    feature_path = os.path.join(MODEL_DIR, "diabetes_feature_cols.pkl")
+    feature_path = os.path.join(MODEL_DIR, "diabetes_feature_cols.pkl" if balanced else "diabetes_feature_cols_unweighted.pkl")
     joblib.dump(feature_cols, feature_path)
     print(f"Feature column order saved to {feature_path}")
 
@@ -171,5 +164,8 @@ def train_model(df: pd.DataFrame, feature_cols: list[str]) -> None:
 #  MAIN
 # ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--balanced", action="store_true", help="Train and replace the active balanced model")
+    args = parser.parse_args()
     df, feature_cols = load_and_preprocess(DATA_PATH)
-    train_model(df, feature_cols)
+    train_model(df, feature_cols, balanced=args.balanced)

@@ -72,7 +72,8 @@ RECOMMENDED_RIDERS: list[dict] = [
     },
     {
         "rider": "Diabetes Care Rider",
-        "trigger": lambda hp: hp.get("diabetes_indicator") in ("Medium", "High"),
+        "trigger": lambda hp: hp.get("diabetes_indicator") in ("Medium", "High")
+                   or "diabetes" in hp.get("conditions", []),
     },
     {
         "rider": "Hospital Cash Rider",

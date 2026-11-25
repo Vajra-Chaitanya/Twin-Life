@@ -8,6 +8,7 @@ const VERDICT: Record<string, { label: string; className: string }> = {
   risky: { label: "Risky", className: "border-risk/40 bg-risk/10 text-risk" },
   improves: { label: "Improves", className: "border-good/40 bg-good/10 text-good" },
   worsens: { label: "Worsens", className: "border-risk/40 bg-risk/10 text-risk" },
+  conditional: { label: "If it shifts", className: "border-gold/40 bg-gold/10 text-champagne" },
 };
 
 export function ScenarioCard({ scenario }: { scenario: Scenario }) {
